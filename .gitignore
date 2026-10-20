@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.claude/
+.tgbp-source/
+test/fixtures/out/
+test/fixtures/cache/
+*.tsbuildinfo

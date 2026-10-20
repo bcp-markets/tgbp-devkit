@@ -1,0 +1,83 @@
+{
+  "name": "@tgbp/kit",
+  "version": "0.1.0",
+  "description": "On-chain helpers for tGBP, the tokenised British pound: token registry, balances, transfers and incoming-transfer watchers on EVM chains and Solana.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bcp-markets/tgbp-devkit.git"
+  },
+  "homepage": "https://github.com/bcp-markets/tgbp-devkit#readme",
+  "bugs": "https://github.com/bcp-markets/tgbp-devkit/issues",
+  "keywords": [
+    "tgbp",
+    "stablecoin",
+    "gbp",
+    "erc20",
+    "solana",
+    "viem"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.34.6",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./evm": {
+      "types": "./dist/evm/index.d.ts",
+      "import": "./dist/evm/index.js"
+    },
+    "./solana": {
+      "types": "./dist/solana/index.d.ts",
+      "import": "./dist/solana/index.js"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "generate:registry": "tsx scripts/generate-registry.ts",
+    "build:fixtures": "forge build --root test/fixtures --contracts . --out out --cache-path cache && tsx scripts/export-fixture.ts",
+    "prepublishOnly": "pnpm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@solana-program/token": "^0.18.0",
+    "@solana/kit": "^8.5.0",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "viem": "^2.57.7",
+    "vitest": "^5.0.5"
+  },
+  "peerDependencies": {
+    "@solana-program/token": "^0.18.0",
+    "@solana/kit": "^8.5.0",
+    "viem": "^2.57.7"
+  },
+  "peerDependenciesMeta": {
+    "@solana-program/token": {
+      "optional": true
+    },
+    "@solana/kit": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    }
+  }
+}
