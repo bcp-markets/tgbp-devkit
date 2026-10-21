@@ -1,7 +1,7 @@
 {
   "name": "@tgbp/kit",
   "version": "0.1.0",
-  "description": "On-chain helpers for tGBP, the tokenised British pound: token registry, balances, transfers and incoming-transfer watchers on EVM chains and Solana.",
+  "description": "tGBP, the tokenised British pound, for developers: token registry, on-chain balances, transfers and watchers on EVM chains and Solana, and a typed client for the mint, redeem and swap API.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -41,6 +41,10 @@
     "./solana": {
       "types": "./dist/solana/index.d.ts",
       "import": "./dist/solana/index.js"
+    },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "import": "./dist/api/index.js"
     }
   },
   "sideEffects": false,
@@ -51,6 +55,8 @@
     "format": "biome check --write .",
     "test": "vitest run",
     "generate:registry": "tsx scripts/generate-registry.ts",
+    "generate:api": "tsx scripts/generate-api.ts",
+    "check:disclosure": "tsx scripts/disclosure.ts",
     "build:fixtures": "forge build --root test/fixtures --contracts . --out out --cache-path cache && tsx scripts/export-fixture.ts",
     "prepublishOnly": "pnpm run build"
   },
@@ -59,10 +65,12 @@
     "@solana-program/token": "^0.18.0",
     "@solana/kit": "^8.5.0",
     "@types/node": "^22.20.5",
+    "openapi-typescript": "^7.13.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "viem": "^2.57.7",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "yaml": "^2.9.1"
   },
   "peerDependencies": {
     "@solana-program/token": "^0.18.0",
