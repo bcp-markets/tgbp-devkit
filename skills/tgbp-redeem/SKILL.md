@@ -29,5 +29,10 @@ An error with `code: "SPEND_POLICY_DENIED"` names the refusing rule in `details.
 `redemptionApprovalAbove` means no human approved it. Tell the user the rule and stop. Never
 split a redemption into smaller ones to get under the approval threshold or a cap.
 
-If the error carries `details.redemptionId`, the redemption exists but its burn failed. Tell the
-user; they can cancel it or send the burn again. Do not create another redemption.
+If the error carries `details.redemptionId`, the redemption exists but the burn did not complete.
+Read the message: only "nothing was burned" means no tGBP moved. Any other burn error may have
+sent the burn, so check `details.hash` on chain before anyone burns again or cancels. Tell the
+user, and never create another redemption.
+
+The tool burns only when the API's redemption is `pending` and matches the chain, amount and bank
+you asked for. Otherwise it burns nothing and asks you to cancel the redemption.

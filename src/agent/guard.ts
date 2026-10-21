@@ -129,7 +129,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     if (spent + amount > dailyCap) throw dailyCapDenied(request, spent)
 
     if (request.action === 'redeem' && amount > approvalAbove) {
-      const approved = await waitForApproval({
+      const { approved, approverError } = await waitForApproval({
         action: 'redeem',
         chain: request.chain,
         destination,
@@ -141,6 +141,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
           'redemptionApprovalAbove',
           `a redemption over ${policy.redemptionApprovalAbove} needs a human's approval, and none was given`,
           request,
+          approverError ? { approverError } : {},
         )
       }
       // The policy may have expired while the human was deciding.
@@ -154,7 +155,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
       action: request.action,
       chain: request.chain,
       destination,
-      amount: request.amount,
+      amount: formatAmount(amount, POLICY_DECIMALS),
     }
     let result: Awaited<ReturnType<SpendLedger['reserve']>>
     try {
@@ -165,9 +166,11 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     if (!result.ok) throw dailyCapDenied(request, result.spent)
   }
 
-  async function waitForApproval(request: ApprovalRequest): Promise<boolean> {
+  async function waitForApproval(
+    request: ApprovalRequest,
+  ): Promise<{ approved: boolean; approverError?: string }> {
     const { approver } = options
-    if (!approver) return false
+    if (!approver) return { approved: false, approverError: 'no approver is configured' }
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<false>((resolve) => {
@@ -179,9 +182,13 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     try {
       const answer = await Promise.race([approver(request, controller.signal), timeout])
       // Only an explicit true approves; a truthy string or object does not.
-      return answer === true && !controller.signal.aborted
-    } catch {
-      return false
+      if (controller.signal.aborted) {
+        return { approved: false, approverError: 'no answer before the timeout' }
+      }
+      return { approved: answer === true }
+    } catch (error) {
+      // Refuse, but say why: a broken client must not look like a human's "no".
+      return { approved: false, approverError: errorMessage(error) }
     } finally {
       clearTimeout(timer)
     }
@@ -219,6 +226,13 @@ function ledgerDenied(path: string, request: SpendRequest, cause: unknown): Tgbp
   return new TgbpKitError(
     'SPEND_POLICY_DENIED',
     `Spend policy refused ${request.action}: the spend ledger ${path} cannot be read or written, so the daily cap cannot be checked`,
-    { cause, details: { rule: 'ledger', ...request, ledgerPath: path } },
+    {
+      cause,
+      details: { rule: 'ledger', ...request, ledgerPath: path, reason: errorMessage(cause) },
+    },
   )
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

@@ -39,8 +39,9 @@ async function main(): Promise<void> {
     env.TGBP_SWAP_BASE_URL ?? (environment === 'production' ? SWAP_PRODUCTION_URL : undefined)
 
   const timeoutSeconds = Number(env.TGBP_APPROVAL_TIMEOUT_SECONDS ?? 300)
-  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new Error('TGBP_APPROVAL_TIMEOUT_SECONDS must be a positive number')
+  // Timers overflow past about 24.8 days; a day is long enough for any human.
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > 86_400) {
+    throw new Error('TGBP_APPROVAL_TIMEOUT_SECONDS must be between 1 and 86400')
   }
 
   const server = createTgbpMcpServer({
