@@ -83,3 +83,82 @@ jobs:
         env:
           TGBP_SOURCE_DIR: .tgbp-source
           TGBP_REQUIRE_SOURCE: '1'
+
+  api-drift:
+    name: API types match the pinned spec; no provider names
+    # bcp-markets/tgbp-api-docs is private: same environment rule as registry-drift.
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch')
+    environment: tgbp-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the pinned tgbp-api-docs commit
+        id: pin
+        run: |
+          sha="$(cat api-spec.lock)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "api-spec.lock is not a commit SHA"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out the pinned API specs and the vendor-name guard
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bcp-markets/tgbp-api-docs
+          ref: ${{ steps.pin.outputs.sha }}
+          path: .tgbp-api-docs
+          ssh-key: ${{ secrets.TGBP_API_DOCS_DEPLOY_KEY }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            openapi.yaml
+            openapi-swap.yaml
+            scripts/check-vendor-names.js
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run test/api-drift.test.ts
+        env:
+          TGBP_API_DOCS_DIR: .tgbp-api-docs
+          TGBP_REQUIRE_SOURCE: '1'
+      # The sweep covers the build output too, since that is what npm publishes.
+      - run: pnpm build
+      - run: pnpm check:disclosure --require-dist
+        env:
+          TGBP_API_DOCS_DIR: .tgbp-api-docs
+
+  sandbox:
+    name: Mint and redeem on sandbox.tgbp.io
+    # The staging API key and the sandbox record ids are secrets in the sandbox
+    # environment, which only main may use. Secrets keep the ids out of public logs.
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch')
+    environment: sandbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run test/sandbox.integration.test.ts
+        env:
+          TGBP_REQUIRE_SANDBOX: '1'
+          TGBP_SANDBOX_API_KEY: ${{ secrets.TGBP_SANDBOX_API_KEY }}
+          TGBP_SANDBOX_CUSTOMER_ID: ${{ secrets.TGBP_SANDBOX_CUSTOMER_ID }}
+          TGBP_SANDBOX_ADDRESS: ${{ secrets.TGBP_SANDBOX_ADDRESS }}
+          TGBP_SANDBOX_BANK_ID: ${{ secrets.TGBP_SANDBOX_BANK_ID }}
+          TGBP_SANDBOX_CHAIN: ${{ secrets.TGBP_SANDBOX_CHAIN }}

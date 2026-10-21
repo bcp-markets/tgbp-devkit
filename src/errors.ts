@@ -23,6 +23,17 @@ export type TgbpErrorCode =
   | 'TRANSFER_REVERTED'
   /** A watcher's stream ended or failed; restart it to keep receiving transfers. */
   | 'WATCHER_STOPPED'
+  /**
+   * The tGBP API answered with an error. `details` carries `status`, the API's own `apiCode`
+   * and `requestId` (quote it to support), and `idempotencyKey` on a call that creates a
+   * record. After a 5xx the call may have taken effect: retry only with that same key.
+   */
+  | 'API_ERROR'
+  /**
+   * The tGBP API gave no response, after every retry. The call may still have taken effect:
+   * retry only with `details.idempotencyKey`, or read the record before sending anything new.
+   */
+  | 'API_UNREACHABLE'
 
 export class TgbpKitError extends Error {
   readonly code: TgbpErrorCode
