@@ -18,6 +18,10 @@ contract MockTgbp {
 
     mapping(address => uint256) public balanceOf;
     mapping(address => bool) public isBanned;
+    // Read-only stand-ins for the EIP-2612 and ERC-20 views an x402 client reads before it
+    // signs a permit. The mock never consumes a permit, so both stay zero.
+    mapping(address => uint256) public nonces;
+    mapping(address => mapping(address => uint256)) public allowance;
     bool public paused;
     uint256 public totalSupply;
 
