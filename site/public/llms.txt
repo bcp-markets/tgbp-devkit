@@ -1,12 +1,12 @@
 # tGBP developers
 
-> tGBP is Tokenised GBP, a British pound stablecoin backed one to one by cash and cash equivalents and issued by BCP Technologies Ltd. This site documents @tgbp/kit, the open-source TypeScript kit for tGBP on EVM chains and Solana.
+> tGBP is Tokenised GBP, a British pound stablecoin backed one to one by cash and cash equivalents and issued by BCP Technologies Ltd. This site documents @tgbp/kit, the open-source TypeScript kit for tGBP on EVM chains and Solana and for the tGBP API.
 
 tGBP has 18 decimals on EVM chains and 9 on Solana. Test tGBP on Base Sepolia has no value.
 
 ## Pages
 
-- [Home](https://dev.tokenisedgbp.com/): what tGBP is, the kit's modules, the API reference and the developer community.
+- [Home](https://dev.tokenisedgbp.com/): what tGBP is, the kit's modules including the API client, the API reference and the developer community.
 - [Quickstart](https://dev.tokenisedgbp.com/quickstart): from a clean machine to a confirmed test tGBP transfer on Base Sepolia.
 - [Describe tGBP accurately](https://dev.tokenisedgbp.com/brand): the name, the claims to make and the claims to avoid.
 
