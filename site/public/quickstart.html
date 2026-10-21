@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quickstart · tGBP developers</title>
+  <meta name="description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @tgbp/kit and viem.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <a class="home" href="/">tGBP developers</a>
+    <nav>
+      <a href="/quickstart">Quickstart</a>
+      <a href="/brand">Describe tGBP</a>
+      <a href="https://github.com/bcp-markets/tgbp-devkit">GitHub</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Quickstart</h1>
+    <p>
+      This guide takes a clean machine to a confirmed test tGBP transfer on Base Sepolia. It takes
+      about 15 minutes, plus the wait for your test tGBP to arrive. You need Node.js 20.6 or later
+      and a terminal.
+    </p>
+    <p>
+      The scripts are also in the repo, under
+      <a href="https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/quickstart"><code>examples/quickstart</code></a>.
+    </p>
+
+    <h2>1. Create the project</h2>
+    <pre><code>node --version
+mkdir tgbp-quickstart &amp;&amp; cd tgbp-quickstart
+npm init -y
+npm pkg set type=module
+npm install @tgbp/kit viem
+echo .env &gt;&gt; .gitignore</code></pre>
+
+    <h2>2. Connect to Base Sepolia</h2>
+    <p>
+      Save this as <code>tgbp.mjs</code>. The other scripts import the token, the account and the
+      clients from it. It uses Base's public RPC unless you set <code>RPC_URL</code>.
+    </p>
+    <pre><code>import { createPublicClient, createWalletClient, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { baseSepolia } from 'viem/chains'
+
+// Test tGBP on Base Sepolia. The kit's registry does not list this chain yet, so pass the
+// deployment itself wherever a helper takes `chain`.
+export const token = {
+  chain: 'base-sepolia',
+  family: 'evm',
+  network: 'testnet',
+  status: 'live',
+  symbol: 'tGBP',
+  decimals: 18,
+  chainId: 84532,
+  address: '0x27f6c8289550fCE67f6B50BeD1F519966aFE5287',
+  explorerUrl: 'https://sepolia.basescan.org',
+}
+
+if (!process.env.PRIVATE_KEY) {
+  throw new Error('PRIVATE_KEY is not set: run node wallet.mjs, then pass --env-file=.env')
+}
+
+const transport = http(process.env.RPC_URL)
+
+export const account = privateKeyToAccount(process.env.PRIVATE_KEY)
+export const publicClient = createPublicClient({ chain: baseSepolia, transport })
+export const walletClient = createWalletClient({ chain: baseSepolia, transport, account })
+</code></pre>
+
+    <h2>3. Create a test wallet</h2>
+    <p>Save this as <code>wallet.mjs</code>, then run <code>node wallet.mjs</code>.</p>
+    <pre><code>import { existsSync, writeFileSync } from 'node:fs'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+
+// Never overwrite a key: the wallet and its test tGBP would be lost with it.
+if (existsSync('.env')) {
+  throw new Error('.env already exists. Keep using that wallet, or move the file away first.')
+}
+
+const key = generatePrivateKey()
+writeFileSync('.env', `PRIVATE_KEY=${key}\n`, { mode: 0o600 })
+console.log(`Test wallet created. Address: ${privateKeyToAccount(key).address}`)
+</code></pre>
+    <p>
+      The key stays in <code>.env</code> on your machine. Use this wallet for testnets only, and
+      never send it real funds.
+    </p>
+
+    <h2>4. Fund the wallet</h2>
+    <ol>
+      <li>
+        Get a little Base Sepolia ETH to pay gas, from one of the
+        <a href="https://docs.base.org/get-started/get-funds">faucets Base lists</a>.
+      </li>
+      <li>
+        Post your wallet address in the
+        <a href="TELEGRAM_LINK">tGBP developers Telegram channel</a> and ask for test tGBP. An admin
+        sends it and replies in the channel.
+      </li>
+    </ol>
+    <div class="warning" role="note">
+      <strong>Admins never DM first.</strong> Test tGBP arrives on-chain. Nobody needs your private
+      key, and nobody will ask you to pay for test tokens.
+    </div>
+
+    <h2>5. Check the balance</h2>
+    <p>Save this as <code>balance.mjs</code>, then run <code>node --env-file=.env balance.mjs</code>.</p>
+    <pre><code>import { formatAmount } from '@tgbp/kit'
+import { getBalance } from '@tgbp/kit/evm'
+import { formatEther } from 'viem'
+import { account, publicClient, token } from './tgbp.mjs'
+
+const { amount } = await getBalance({ publicClient, chain: token, owner: account.address })
+const gas = await publicClient.getBalance({ address: account.address })
+
+console.log(`${account.address} holds ${formatAmount(amount, token.decimals)} tGBP`)
+console.log(`and ${formatEther(gas)} Base Sepolia ETH for gas`)
+</code></pre>
+
+    <h2>6. Send tGBP</h2>
+    <p>
+      Save this as <code>send.mjs</code>. Run it with a recipient address and an amount:
+      <code>node --env-file=.env send.mjs 0xRecipient 1</code>.
+    </p>
+    <pre><code>import { isTgbpKitError, parseAmount } from '@tgbp/kit'
+import { transfer } from '@tgbp/kit/evm'
+import { publicClient, token, walletClient } from './tgbp.mjs'
+
+const [to, value = '1'] = process.argv.slice(2)
+if (!to) {
+  console.error('Usage: node --env-file=.env send.mjs &lt;recipient address&gt; [amount]')
+  process.exit(1)
+}
+
+try {
+  const { hash, receipt } = await transfer({
+    publicClient,
+    walletClient,
+    chain: token,
+    to,
+    amount: parseAmount(value, token.decimals),
+  })
+  console.log(`Sent ${value} tGBP, confirmed in block ${receipt.blockNumber}`)
+  console.log(`${token.explorerUrl}/tx/${hash}`)
+} catch (error) {
+  // The kit explains the failures it can predict, such as an empty balance.
+  if (!isTgbpKitError(error)) throw error
+  console.error(`${error.code}: ${error.message}`)
+  process.exit(1)
+}
+</code></pre>
+    <p>
+      <code>transfer</code> checks the pause state, both addresses' ban status and your balance
+      before it signs. It returns once the transaction is mined. Open the printed link to see the
+      transfer on the block explorer.
+    </p>
+
+    <h2>Next</h2>
+    <ul>
+      <li>Watch for incoming payments with <code>watchIncomingTransfers</code>.</li>
+      <li>Handle each error code: see the <a href="https://github.com/bcp-markets/tgbp-devkit#errors">README</a>.</li>
+      <li>Before you write about tGBP in your app, read <a href="/brand">how to describe it</a>.</li>
+    </ul>
+  </main>
+  <footer>
+    Tokenised GBP is issued by BCP Technologies Ltd.
+    <a href="https://www.tokenisedgbp.com">tokenisedgbp.com</a> ·
+    <a href="https://www.tokenisedgbp.com/.well-known/security.txt">Report a vulnerability</a> ·
+    <a href="/llms.txt">llms.txt</a>
+  </footer>
+</body>
+</html>
