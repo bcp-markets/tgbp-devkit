@@ -20,7 +20,9 @@ try {
   console.log(`${token.explorerUrl}/tx/${hash}`)
 } catch (error) {
   // The kit explains the failures it can predict, such as an empty balance.
-  if (!isTgbpKitError(error)) throw error
-  console.error(`${error.code}: ${error.message}`)
+  // parseAmount throws a RangeError for an amount the token cannot hold.
+  if (isTgbpKitError(error)) console.error(`${error.code}: ${error.message}`)
+  else if (error instanceof RangeError) console.error(error.message)
+  else throw error
   process.exit(1)
 }
