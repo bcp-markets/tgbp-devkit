@@ -12,6 +12,7 @@ import { TgbpKitError } from '../errors.js'
 import type { EvmChainKey, EvmTokenDeployment } from '../registry/index.js'
 import { tgbpAbi } from './abi.js'
 import {
+  assertCanTransfer,
   assertClientChain,
   bannedError,
   insufficientError,
@@ -99,18 +100,7 @@ export async function transfer({
     assertClientChain(walletClient, token),
   ])
 
-  const contract = { address: token.address, abi: tgbpAbi } as const
-  const [paused, senderBanned, recipientBanned, balance] = await Promise.all([
-    publicClient.readContract({ ...contract, functionName: 'paused' }),
-    publicClient.readContract({ ...contract, functionName: 'isBanned', args: [account.address] }),
-    publicClient.readContract({ ...contract, functionName: 'isBanned', args: [recipient] }),
-    publicClient.readContract({ ...contract, functionName: 'balanceOf', args: [account.address] }),
-  ])
-  if (senderBanned || recipientBanned) {
-    throw bannedError(token, senderBanned ? account.address : recipient)
-  }
-  if (paused) throw pausedError(token)
-  if (balance < amount) throw insufficientError(token, account.address, balance, amount)
+  await assertCanTransfer(publicClient, token, account.address, recipient, amount)
 
   let hash: Hash
   try {

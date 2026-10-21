@@ -18,9 +18,10 @@ import {
   createPublicClient,
   createWalletClient,
   getAddress,
-  type Hash,
   http,
   isAddress,
+  isHash,
+  parseEventLogs,
 } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
@@ -70,12 +71,14 @@ async function fundWithCast(keystoreAccount: string): Promise<`0x${string}`> {
     price.toString(),
     '--account',
     keystoreAccount,
-    '--rpc-url',
-    rpcUrl,
     '--json',
   ]
   // stdin and stderr stay on the terminal, so cast can ask for the keystore password.
-  const child = spawn('cast', args, { stdio: ['inherit', 'pipe', 'inherit'] })
+  // The RPC URL goes in the environment, so a URL with an API key stays out of `ps`.
+  const child = spawn('cast', args, {
+    stdio: ['inherit', 'pipe', 'inherit'],
+    env: { ...process.env, ETH_RPC_URL: rpcUrl },
+  })
   let stdout = ''
   child.stdout.on('data', (chunk: Buffer) => {
     stdout += chunk.toString()
@@ -84,21 +87,38 @@ async function fundWithCast(keystoreAccount: string): Promise<`0x${string}`> {
     child.on('error', reject)
     child.on('close', resolve)
   })
-  if (code !== 0) throw new Error(`cast send exited with ${code}`)
-  const receipt = JSON.parse(stdout) as { status: string; from: string; transactionHash: string }
-  if (receipt.status !== '0x1')
-    throw new Error(`funding transaction ${receipt.transactionHash} failed`)
-  console.log(`Funded the payer: ${token.explorerUrl}/tx/${receipt.transactionHash}`)
+  if (code !== 0) throw new Error(`cast send failed (exit ${code ?? 'signal'})`)
+  let receipt: { status?: unknown; from?: unknown; transactionHash?: unknown }
+  try {
+    receipt = JSON.parse(stdout)
+  } catch (cause) {
+    throw new Error(
+      `cast send printed no JSON receipt; check the payer before re-running:\n${stdout}`,
+      {
+        cause,
+      },
+    )
+  }
+  console.log(`Funding transaction: ${token.explorerUrl}/tx/${String(receipt.transactionHash)}`)
+  if (receipt.status !== '0x1') throw new Error('the funding transaction failed')
+  if (typeof receipt.from !== 'string' || !isAddress(receipt.from)) {
+    throw new Error(`cast send reported no sender: ${stdout}`)
+  }
   return getAddress(receipt.from)
 }
 
 async function waitForFunding(): Promise<void> {
   console.log(`Send ${formatAmount(price, token.decimals)} test tGBP to ${account.address}`)
   const deadline = Date.now() + 15 * 60_000
-  while ((await tgbpBalance(account.address)) < price) {
-    if (Date.now() > deadline) throw new Error('the payer was not funded within 15 minutes')
+  while (Date.now() < deadline) {
+    try {
+      if ((await tgbpBalance(account.address)) >= price) return
+    } catch (error) {
+      console.warn('Balance read failed; polling again', error)
+    }
     await new Promise((resolve) => setTimeout(resolve, 5_000))
   }
+  throw new Error('the payer was not funded within 15 minutes')
 }
 
 async function main(): Promise<void> {
@@ -113,7 +133,7 @@ async function main(): Promise<void> {
   const payTo =
     fundFrom === undefined ? getAddress(payToArg as string) : await fundWithCast(fundFrom)
   if (fundFrom === undefined) await waitForFunding()
-  const payToBefore = await tgbpBalance(payTo)
+  const payerBefore = await tgbpBalance(account.address)
 
   const app = express()
   app.use(
@@ -132,20 +152,35 @@ async function main(): Promise<void> {
   try {
     const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: PENCE })
     const { response, settlement } = await pay(`http://127.0.0.1:${port}/quote`)
-    console.log(`API response ${response.status}:`, await response.json())
+    const hash = settlement?.transaction
+    console.log(`Settlement: ${token.explorerUrl}/tx/${hash}`)
+    console.log(`API response ${response.status}:`, await response.text())
     check(response.status === 200, 'the paid request got the API response')
-    check(settlement?.success === true, 'the facilitator settled the payment')
+    if (hash === undefined || !isHash(hash)) {
+      check(false, 'the facilitator reported a transaction hash')
+      return
+    }
 
-    const hash = settlement?.transaction as Hash
     const receipt = await publicClient.waitForTransactionReceipt({ hash })
-    check(receipt.status === 'success', `settlement ${token.explorerUrl}/tx/${hash}`)
-    check((await tgbpBalance(account.address)) === 0n, 'the payer paid exactly 5p')
-    check((await tgbpBalance(payTo)) - payToBefore === price, `${payTo} received 5p`)
+    check(receipt.status === 'success', 'the settlement transaction succeeded on Base Sepolia')
+    const transfers = parseEventLogs({ abi: tgbpAbi, eventName: 'Transfer', logs: receipt.logs })
+    check(
+      transfers.some(
+        (log) =>
+          getAddress(log.address) === getAddress(token.address) &&
+          log.args.from === account.address &&
+          log.args.to === payTo &&
+          log.args.value === price,
+      ),
+      `the settlement moved exactly 5p of tGBP from the payer to ${payTo}`,
+    )
+    check(payerBefore - (await tgbpBalance(account.address)) === price, 'the payer paid 5p, once')
     check(
       (await publicClient.getBalance({ address: account.address })) === 0n,
       'the payer still holds 0 ETH: the facilitator paid the gas',
     )
   } finally {
+    server.closeAllConnections()
     server.close()
   }
 }

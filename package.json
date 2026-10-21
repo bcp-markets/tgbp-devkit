@@ -112,6 +112,7 @@
     "@x402/evm": "^2.28.0",
     "@x402/express": "^2.28.0",
     "@x402/extensions": "^2.28.0",
+    "express": "^4.21.0 || ^5.0.0",
     "viem": "^2.57.7",
     "zod": "^4.6.5"
   },
@@ -135,6 +136,9 @@
       "optional": true
     },
     "@x402/extensions": {
+      "optional": true
+    },
+    "express": {
       "optional": true
     },
     "viem": {
