@@ -276,6 +276,53 @@ const agent = createAgentActions({ guard, api: tgbp, evm: () => ({ publicClient,
 await agent.transfer({ chain: 'sepolia', to: '0x…', amount: '25.00' })
 ```
 
+## x402 payments (Base Sepolia)
+
+[x402](https://x402.org) lets an HTTP API charge per request in a stablecoin, so an agent can pay
+for a call without an account or an API key. `@tgbp/kit/x402/server` prices an Express route in
+pence of tGBP. `@tgbp/kit/x402/client` pays such a route. Both run on Base Sepolia with test
+tGBP, through the free public facilitator at `https://x402.org/facilitator`.
+
+```sh
+npm install @tgbp/kit viem @x402/core @x402/evm @x402/extensions @x402/express express  # server
+npm install @tgbp/kit viem @x402/core @x402/evm                                          # client
+```
+
+```ts
+import express from 'express'
+import { tgbpPaymentMiddleware } from '@tgbp/kit/x402/server'
+
+const app = express()
+app.use(
+  tgbpPaymentMiddleware({
+    routes: { 'GET /quote': { pence: 5, payTo: '0xYourAddress', description: 'A quote' } },
+  }),
+)
+app.get('/quote', (req, res) => res.json({ quote: '…' }))
+```
+
+```ts
+import { createTgbpPaymentFetch } from '@tgbp/kit/x402/client'
+
+const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: 10 })
+const { response, settlement } = await pay('https://api.example.com/quote')
+console.log(await response.json(), settlement?.transaction) // the Base Sepolia tx hash
+```
+
+tGBP supports EIP-2612 `permit` but not EIP-3009, so payments use the x402 exact scheme's
+Permit2 method. The route also offers the `eip2612GasSponsoring` extension. With it, the payer
+signs two messages: an EIP-2612 permit that lets Permit2 move the price, and the Permit2 transfer
+itself. The facilitator submits both in one transaction and pays the gas, so **the payer needs
+test tGBP but no ETH**.
+
+Before it signs, the client reads the token's pause state, the ban status of payer and payee,
+and the payer's balance. It throws `TOKEN_PAUSED`, `ADDRESS_BANNED` or `INSUFFICIENT_BALANCE`
+without signing anything. It refuses a price above `maxPencePerRequest` with
+`PAYMENT_OVER_LIMIT`.
+
+[`examples/x402-demo`](examples/x402-demo) runs the whole flow on Base Sepolia: an agent pays 5p
+for an API call from a wallet that holds no ETH.
+
 ## Errors
 
 Failures the kit can explain throw a `TgbpKitError` with a `code`:
@@ -290,6 +337,9 @@ Failures the kit can explain throw a `TgbpKitError` with a `code`:
 | `API_ERROR` | The API answered with an error. `details` has `status`, `apiCode` and `requestId`. |
 | `API_UNREACHABLE` | The API gave no response after every retry. |
 | `SPEND_POLICY_DENIED` | The agent spend policy refused the action. `details.rule` names the rule. |
+| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain. |
+| `PAYMENT_OVER_LIMIT` | An x402 price is above the client's `maxPencePerRequest`. |
+| `PAYMENT_REFUSED` | The x402 server rejected a signed payment; `details.reason` says why. |
 
 After a 5xx or `API_UNREACHABLE`, a create may have taken effect. Retry it only with
 `error.details.idempotencyKey`, or read the record before you send anything new.
