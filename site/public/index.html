@@ -50,6 +50,10 @@
           <td><code>@tgbp/kit/solana</code></td>
           <td>The same helpers on Solana, built on <code>@solana/kit</code>.</td>
         </tr>
+        <tr>
+          <td><code>@tgbp/kit/api</code></td>
+          <td>A typed client for the tGBP API's mint, redeem, swap and balance endpoints. It sends idempotency keys and retries only what is safe to repeat. Needs the API key you get at onboarding.</td>
+        </tr>
       </tbody>
     </table>
     <p>
@@ -62,6 +66,12 @@
       Business clients mint and redeem tGBP through the tGBP API. Its full reference is at
       <a href="https://mint.tgbp.io/api-reference">mint.tgbp.io/api-reference</a>, behind your
       tGBP account login.
+    </p>
+    <p>
+      <code>@tgbp/kit/api</code> wraps those endpoints. Staging keys work against the sandbox,
+      which runs on testnets and simulates bank transfers. The
+      <a href="https://github.com/bcp-markets/tgbp-devkit#mint-redeem-and-swap-api">README</a>
+      shows a mint, a redemption and a swap quote.
     </p>
 
     <h2>Community</h2>
