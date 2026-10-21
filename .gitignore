@@ -3,6 +3,7 @@ dist/
 coverage/
 .claude/
 .tgbp-source/
+.api-spec/
 test/fixtures/out/
 test/fixtures/cache/
 *.tsbuildinfo
