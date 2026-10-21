@@ -47,6 +47,7 @@ function created(overrides: Record<string, unknown> = {}) {
     status: 'created',
     data: {
       redemptionId: 'red_1',
+      status: 'pending',
       burnAddress: BURN,
       chain: 'sepolia',
       amount: { amount: '80.00', currency: 'GBP' },
@@ -267,6 +268,8 @@ describe('redemption checks after the API answers', () => {
     ['chain', { chain: 'base' }],
     ['bank', { bankAccount: { id: 'bank_other', name: 'x', type: 'gbp' } }],
     ['burn address', { burnAddress: 'not-an-address' }],
+    ['status failed', { status: 'failed' }],
+    ['bank', { bankAccount: null }],
   ])(
     'burns nothing when the redemption does not match the request (%s)',
     async (field, overrides) => {
@@ -289,6 +292,21 @@ describe('redemption checks after the API answers', () => {
     const { body } = await call(await connect(), 'tgbp_redeem', redeem)
     expect(body.code).toBe('INSUFFICIENT_BALANCE')
     expect(body.details.redemptionId).toBe('red_1')
+    expect(body.message).toContain('nothing was burned')
+  })
+
+  it('never says nothing was burned when the burn may have been sent', async () => {
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    const { TgbpKitError } = await import('../src/errors.js')
+    chain.transfer.mockRejectedValueOnce(
+      new TgbpKitError('TRANSFER_UNCONFIRMED', 'not confirmed', { details: { hash: '0xabc' } }),
+    )
+    const { body } = await call(await connect(), 'tgbp_redeem', redeem)
+    expect(body.details).toMatchObject({ redemptionId: 'red_1', hash: '0xabc' })
+    expect(body.message).toContain('may have been sent')
+    expect(body.message).not.toContain('nothing was burned')
   })
 })
 

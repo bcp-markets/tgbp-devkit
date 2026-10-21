@@ -30,7 +30,9 @@ const chain = text().describe('Registry chain key, e.g. "sepolia"')
 const amount = text().describe('Decimal amount, e.g. "12.50"')
 const idempotencyKey = text()
   .optional()
-  .describe('To retry an earlier attempt, pass its idempotencyKey; never for a new one')
+  .describe(
+    'To retry an earlier attempt, pass its idempotencyKey; never for a new one. A retry counts against the caps again.',
+  )
 
 export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const server = new McpServer({ name: 'tgbp', version: KIT_VERSION })

@@ -48,7 +48,7 @@ export function createAgentActions(options: AgentActionsOptions) {
   }
 
   function requireApi(): TgbpClient {
-    if (!options.api) throw new Error('No tGBP API key is configured')
+    if (!options.api) throw new Error('No tGBP API key is configured; set TGBP_API_KEY')
     return options.api
   }
 
@@ -69,6 +69,7 @@ export function createAgentActions(options: AgentActionsOptions) {
       const token = getEvmToken(params.chain)
       const baseUnits = parseAmount(params.amount, token.decimals)
       const amount = formatAmount(baseUnits, token.decimals)
+      const clients = evmClients(token)
       await guard.authorize({
         action: 'transfer',
         chain: token.chain,
@@ -76,7 +77,7 @@ export function createAgentActions(options: AgentActionsOptions) {
         amount,
       })
       const { hash } = await transfer({
-        ...evmClients(token),
+        ...clients,
         chain: token,
         to: params.to,
         amount: baseUnits,
@@ -140,7 +141,8 @@ export function createAgentActions(options: AgentActionsOptions) {
         amount: { currency: 'GBP', value },
         ...(params.reference ? { reference: params.reference } : {}),
       })
-      if (created.status === 'pending_approval') return { redemption: created }
+      // A second approver must act first; nothing is burned, and the spend stays counted.
+      if (created.status === 'pending_approval') return { redemption: created, burned: false }
       const redemption: Redemption = created.data
       assertRedemptionMatches(redemption, token, params.bankId, amount)
       try {
@@ -150,7 +152,7 @@ export function createAgentActions(options: AgentActionsOptions) {
           to: redemption.burnAddress,
           amount: baseUnits,
         })
-        return { redemption: created, burnHash: hash }
+        return { redemption: created, burned: true, burnHash: hash }
       } catch (error) {
         throw burnFailed(error, redemption.redemptionId)
       }
@@ -169,7 +171,8 @@ export function createAgentActions(options: AgentActionsOptions) {
       minOut?: string
       idempotencyKey?: string
     }): Promise<{ data: Conversion; idempotencyKey: string }> {
-      if (!options.swap) throw new Error('No swap API is configured')
+      if (!options.swap)
+        throw new Error('No swap API is configured; set TGBP_API_KEY and TGBP_SWAP_BASE_URL')
       const chain = getEvmToken(params.chain).chain
       const swapChain = SWAP_CHAINS.find((c) => c === chain)
       if (!swapChain) {
@@ -231,26 +234,50 @@ function assertRedemptionMatches(
     new Error(
       `Redemption ${redemption.redemptionId} does not match the request (${field}); nothing was burned. Cancel it.`,
     )
+  // A redemption in any other state will never pay out, so a burn would destroy the tGBP.
+  if (redemption.status !== 'pending') throw mismatch(`status ${redemption.status}`)
   if (redemption.chain !== token.chain) throw mismatch('chain')
-  if (redemption.bankAccount && redemption.bankAccount.id !== bankId) throw mismatch('bank')
+  if (redemption.bankAccount?.id !== bankId) throw mismatch('bank')
   let returned: bigint
   try {
-    returned = parseAmount(redemption.amount.amount, GBP_DECIMALS)
+    returned = parseAmount(redemption.amount.amount, 18)
   } catch {
     throw mismatch('amount')
   }
-  if (returned !== parseAmount(amount, GBP_DECIMALS)) throw mismatch('amount')
+  if (returned !== parseAmount(amount, 18)) throw mismatch('amount')
   if (!isAddress(redemption.burnAddress)) throw mismatch('burn address')
 }
 
-/** Keep the original code, and add the redemption id the caller needs to recover. */
+/** Failures raised before the burn was broadcast, or by a mined revert: no tGBP moved. */
+const NOT_BURNED = new Set<string>([
+  'INSUFFICIENT_BALANCE',
+  'ADDRESS_BANNED',
+  'TOKEN_PAUSED',
+  'WRONG_CHAIN_ADDRESS',
+  'UNKNOWN_CHAIN',
+  'TRANSFER_REVERTED',
+])
+
+/**
+ * Keep the original code, and add the redemption id the caller needs to
+ * recover. Only a failure known to have moved nothing says so; any other may
+ * have burned already, and a second burn would destroy the tGBP twice.
+ */
 function burnFailed(error: unknown, redemptionId: string): Error {
-  const message = `Redemption ${redemptionId} was created but its burn failed; cancel it or send the burn again`
-  if (isTgbpKitError(error)) {
-    return new TgbpKitError(error.code, `${message}: ${error.message}`, {
-      cause: error,
-      details: { ...error.details, redemptionId },
-    })
-  }
-  return new Error(message, { cause: error })
+  const kit = isTgbpKitError(error) ? error : undefined
+  const advice =
+    kit && NOT_BURNED.has(kit.code)
+      ? 'nothing was burned; fix the cause and burn again, or cancel it'
+      : 'the burn may have been sent; check the transaction and the burn address before you burn again or cancel'
+  const reason =
+    kit?.message ??
+    ((error as { shortMessage?: unknown }).shortMessage as string | undefined) ??
+    (error instanceof Error ? error.message : String(error))
+  const message = `Redemption ${redemptionId} was created but its burn did not complete: ${advice}. ${reason}`
+  return kit
+    ? new TgbpKitError(kit.code, message, {
+        cause: error,
+        details: { ...kit.details, redemptionId },
+      })
+    : new Error(message, { cause: error })
 }

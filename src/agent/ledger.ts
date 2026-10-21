@@ -6,6 +6,7 @@
  * then fails: the ledger may overstate what was spent, never understate it.
  */
 import { open, readFile, unlink } from 'node:fs/promises'
+import { dirname } from 'node:path'
 
 import { type SpendAction, toPolicyUnits } from './policy.js'
 
@@ -52,12 +53,16 @@ export class SpendLedger {
       const spent = sumDay(await this.read(), entry.day)
       if (spent + toPolicyUnits(entry.amount) > cap) return { ok: false, spent }
       const handle = await open(this.path, 'a', 0o600)
+      let created: boolean
       try {
+        created = (await handle.stat()).size === 0
         await handle.write(`${JSON.stringify(entry)}\n`)
         await handle.sync()
       } finally {
         await handle.close()
       }
+      // A new file is durable only once its directory entry is, too.
+      if (created) await syncDirectory(dirname(this.path))
       return { ok: true }
     })
   }
@@ -103,8 +108,19 @@ export class SpendLedger {
     try {
       return await fn()
     } finally {
-      await unlink(lockPath)
+      // Never let the release hide fn's own result or error. A lock that
+      // could not be removed makes the next action refuse, which surfaces it.
+      await unlink(lockPath).catch(() => {})
     }
+  }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
 }
 
