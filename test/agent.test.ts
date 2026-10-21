@@ -1,0 +1,234 @@
+/**
+ * The spend policy, its ledger and the guard: every rule refuses with
+ * SPEND_POLICY_DENIED and names itself.
+ */
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import {
+  type Approver,
+  createSpendGuard,
+  isTgbpKitError,
+  loadSpendPolicy,
+  parseSpendPolicy,
+  type SpendGuardOptions,
+  type SpendPolicy,
+  type SpendRequest,
+} from '../src/agent/index.js'
+
+const ALICE = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
+const NOW = new Date('2026-10-21T12:00:00Z')
+
+const POLICY: SpendPolicy = {
+  version: 1,
+  expiresAt: '2026-12-31T23:59:59Z',
+  actions: ['balance', 'transfer', 'mint', 'redeem', 'swap'],
+  chains: ['sepolia'],
+  destinations: [ALICE, 'bank_ok'],
+  perTransferCap: '100',
+  dailyCap: '150',
+  redemptionApprovalAbove: '50',
+}
+
+const transfer = (amount: string, extra: Partial<SpendRequest> = {}): SpendRequest =>
+  ({ action: 'transfer', chain: 'sepolia', destination: ALICE, amount, ...extra }) as SpendRequest
+const redeem = (amount: string): SpendRequest => ({
+  action: 'redeem',
+  chain: 'sepolia',
+  destination: 'bank_ok',
+  amount,
+})
+
+let dir: string
+let ledgerPath: string
+
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'tgbp-agent-'))
+  ledgerPath = join(dir, 'policy.ledger.jsonl')
+})
+
+afterEach(() => rm(dir, { recursive: true, force: true }))
+
+function guard(options: Partial<SpendGuardOptions> = {}) {
+  return createSpendGuard({ policy: POLICY, ledgerPath, now: () => NOW, ...options })
+}
+
+async function refusal(promise: Promise<unknown>): Promise<string> {
+  const error = await promise.then(
+    () => undefined,
+    (e: unknown) => e,
+  )
+  if (!isTgbpKitError(error, 'SPEND_POLICY_DENIED')) {
+    throw new Error(`expected SPEND_POLICY_DENIED, got ${String(error)}`)
+  }
+  return error.details.rule as string
+}
+
+describe('parseSpendPolicy', () => {
+  it('accepts a complete policy', () => {
+    expect(parseSpendPolicy(POLICY)).toEqual(POLICY)
+  })
+
+  it.each([
+    ['a missing field', { ...POLICY, dailyCap: undefined }, 'missing field "dailyCap"'],
+    ['an unknown field', { ...POLICY, dailyCaps: '5' }, 'unknown field "dailyCaps"'],
+    ['an unknown action', { ...POLICY, actions: ['bridge'] }, 'unknown action "bridge"'],
+    ['a numeric cap', { ...POLICY, perTransferCap: 100 }, '"perTransferCap" must be'],
+    ['a negative cap', { ...POLICY, dailyCap: '-1' }, '"dailyCap" must be'],
+    ['an expiry with no zone', { ...POLICY, expiresAt: '2026-12-31T23:59' }, '"expiresAt"'],
+    ['another version', { ...POLICY, version: 2 }, '"version" must be 1'],
+  ])('rejects %s', (_, input, message) => {
+    expect(() => parseSpendPolicy(input)).toThrow(message)
+  })
+
+  it('loads a policy file', async () => {
+    const path = join(dir, 'policy.json')
+    await writeFile(path, JSON.stringify(POLICY))
+    await expect(loadSpendPolicy(path)).resolves.toEqual(POLICY)
+  })
+})
+
+describe('createSpendGuard', () => {
+  it('allows an action within the policy and records it in the ledger', async () => {
+    await guard().authorize(transfer('40'))
+    const [line] = (await readFile(ledgerPath, 'utf8')).trim().split('\n')
+    expect(JSON.parse(line ?? '')).toMatchObject({
+      day: '2026-10-21',
+      action: 'transfer',
+      destination: ALICE,
+      amount: '40',
+    })
+  })
+
+  it('refuses a transfer over the per-transfer cap', async () => {
+    expect(await refusal(guard().authorize(transfer('100.01')))).toBe('perTransferCap')
+  })
+
+  it('refuses a destination that is not allowlisted', async () => {
+    const other = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC'
+    expect(await refusal(guard().authorize(transfer('1', { destination: other })))).toBe(
+      'destinations',
+    )
+  })
+
+  it('matches an EVM destination whatever its case', async () => {
+    await expect(
+      guard().authorize(transfer('1', { destination: ALICE.toLowerCase() })),
+    ).resolves.toBeUndefined()
+  })
+
+  it('refuses a chain the policy does not allow', async () => {
+    expect(await refusal(guard().authorize(transfer('1', { chain: 'base' })))).toBe('chains')
+  })
+
+  it('refuses an action the policy does not allow', async () => {
+    const g = guard({ policy: { ...POLICY, actions: ['balance'] } })
+    expect(await refusal(g.authorize(transfer('1')))).toBe('actions')
+  })
+
+  it('refuses everything once the policy has expired', async () => {
+    const g = guard({ now: () => new Date('2027-01-01T00:00:00Z') })
+    expect(await refusal(g.authorize({ action: 'balance', chain: 'sepolia' }))).toBe('expiresAt')
+    expect(await refusal(g.authorize(transfer('1')))).toBe('expiresAt')
+  })
+
+  it('refuses a transfer that would pass the daily cap, and resets on the next UTC day', async () => {
+    await guard().authorize(transfer('100'))
+    expect(await refusal(guard().authorize(transfer('50.01')))).toBe('dailyCap')
+    await guard().authorize(transfer('50'))
+    const tomorrow = guard({ now: () => new Date('2026-10-22T00:00:00Z') })
+    await expect(tomorrow.authorize(transfer('100'))).resolves.toBeUndefined()
+  })
+
+  it('never lets concurrent actions share out more than the daily cap', async () => {
+    const g = guard()
+    const results = await Promise.allSettled([1, 2, 3].map(() => g.authorize(transfer('60'))))
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2)
+  })
+
+  it('refuses when the ledger cannot be read', async () => {
+    await mkdir(ledgerPath)
+    expect(await refusal(guard().authorize(transfer('1')))).toBe('ledger')
+  })
+
+  it('refuses when the ledger holds a corrupt line, rather than counting it as zero', async () => {
+    await writeFile(ledgerPath, '{"day":"2026-10-21","amount":"lots"}\n')
+    expect(await refusal(guard().authorize(transfer('1')))).toBe('ledger')
+  })
+
+  it('clears a lock left by a process that died', async () => {
+    await writeFile(`${ledgerPath}.lock`, '')
+    const old = new Date(Date.now() - 60_000)
+    await utimes(`${ledgerPath}.lock`, old, old)
+    await expect(guard().authorize(transfer('1'))).resolves.toBeUndefined()
+  })
+
+  it('leaves balance reads out of the ledger', async () => {
+    await guard().authorize({ action: 'balance', chain: 'sepolia' })
+    await expect(readFile(ledgerPath)).rejects.toThrow()
+  })
+})
+
+describe('redemption approval', () => {
+  it('lets a redemption at the threshold through without asking', async () => {
+    let asked = false
+    const approver: Approver = async () => {
+      asked = true
+      return true
+    }
+    await guard({ approver }).authorize(redeem('50'))
+    expect(asked).toBe(false)
+  })
+
+  it('refuses a redemption over the threshold when no human can be asked', async () => {
+    expect(await refusal(guard().authorize(redeem('50.01')))).toBe('redemptionApprovalAbove')
+  })
+
+  it('allows it once a human approves', async () => {
+    await expect(guard({ approver: async () => true }).authorize(redeem('80'))).resolves.toBe(
+      undefined,
+    )
+  })
+
+  it('refuses it when the human says no', async () => {
+    const g = guard({ approver: async () => false })
+    expect(await refusal(g.authorize(redeem('80')))).toBe('redemptionApprovalAbove')
+  })
+
+  it('refuses on timeout, aborts the request, and ignores a late yes', async () => {
+    let aborted = false
+    const approver: Approver = (_, signal) =>
+      new Promise((resolve) => {
+        signal.addEventListener('abort', () => {
+          aborted = true
+        })
+        setTimeout(() => resolve(true), 100)
+      })
+    const g = guard({ approver, approvalTimeoutMs: 20 })
+    expect(await refusal(g.authorize(redeem('80')))).toBe('redemptionApprovalAbove')
+    expect(aborted).toBe(true)
+    await expect(readFile(ledgerPath)).rejects.toThrow()
+  })
+
+  it('refuses when the approver fails or answers anything but true', async () => {
+    const failing = guard({ approver: () => Promise.reject(new Error('client gone')) })
+    expect(await refusal(failing.authorize(redeem('80')))).toBe('redemptionApprovalAbove')
+    const vague = guard({ approver: async () => 'yes' as unknown as boolean })
+    expect(await refusal(vague.authorize(redeem('80')))).toBe('redemptionApprovalAbove')
+  })
+
+  it('does not ask a human about a redemption the daily cap would refuse', async () => {
+    let asked = false
+    await guard().authorize(transfer('100'))
+    const g = guard({
+      approver: async () => {
+        asked = true
+        return true
+      },
+    })
+    expect(await refusal(g.authorize(redeem('80')))).toBe('dailyCap')
+    expect(asked).toBe(false)
+  })
+})
