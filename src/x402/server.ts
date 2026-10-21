@@ -4,10 +4,11 @@ import type { AssetAmount } from '@x402/core/types'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
 import { paymentMiddleware } from '@x402/express'
 import { declareEip2612GasSponsoringExtension } from '@x402/extensions'
-import { getAddress, isAddress } from 'viem'
+import { getAddress, isAddress, zeroAddress } from 'viem'
 
 import type { EvmTokenDeployment } from '../registry/index.js'
 import {
+  MAX_PAYMENT_WINDOW_SECONDS,
   penceToBaseUnits,
   TGBP_BASE_SEPOLIA,
   TGBP_EIP712_DOMAIN,
@@ -16,6 +17,7 @@ import {
 } from './token.js'
 
 export {
+  MAX_PAYMENT_WINDOW_SECONDS,
   penceToBaseUnits,
   TGBP_BASE_SEPOLIA,
   TGBP_EIP712_DOMAIN,
@@ -44,7 +46,7 @@ export interface TgbpRoutePrice {
   payTo: string
   description?: string
   mimeType?: string
-  /** How long a signed payment stays valid. Defaults to 300 seconds. */
+  /** How long a signed payment stays valid. Defaults to 300 seconds, at most 600. */
   maxTimeoutSeconds?: number
 }
 
@@ -53,7 +55,11 @@ export interface TgbpPaymentMiddlewareOptions {
   routes: Record<string, TgbpRoutePrice>
   /** Defaults to tGBP on Base Sepolia. */
   token?: EvmTokenDeployment
-  /** Defaults to the x402.org facilitator. */
+  /**
+   * Verifies and settles payments. Defaults to the x402.org facilitator,
+   * which serves testnets only, so a mainnet token needs one passed here.
+   * The middleware trusts the facilitator's report that a payment settled.
+   */
   facilitator?: FacilitatorClient
   /**
    * Ask the facilitator what it supports when the middleware is created.
@@ -66,34 +72,50 @@ export interface TgbpPaymentMiddlewareOptions {
  * Express middleware that answers a paid route with HTTP 402 until the
  * request carries a tGBP payment, then has the facilitator verify and settle
  * it. The route also offers the `eip2612GasSponsoring` extension: the payer
- * signs an EIP-2612 permit for Permit2, and the facilitator submits it with
- * the payment, so the payer needs no ETH.
+ * signs an EIP-2612 permit for Permit2, and a facilitator that supports the
+ * extension submits it with the payment, so the payer needs no ETH.
+ *
+ * The facilitator settles after the route handler succeeds. A handler that
+ * answers 4xx or 5xx cancels the settlement.
  */
 export function tgbpPaymentMiddleware({
   routes,
   token = TGBP_BASE_SEPOLIA,
-  facilitator = new HTTPFacilitatorClient({ url: X402_ORG_FACILITATOR_URL }),
+  facilitator,
   syncFacilitatorOnStart = true,
 }: TgbpPaymentMiddlewareOptions) {
+  if (facilitator === undefined && token.network !== 'testnet') {
+    throw new TypeError(`tGBP on ${token.chain} is a mainnet token; pass a mainnet facilitator`)
+  }
   const network = x402Network(token)
   const config: Record<string, RouteConfig> = {}
   for (const [route, { pence, payTo, description, mimeType, maxTimeoutSeconds }] of Object.entries(
     routes,
   )) {
-    if (!isAddress(payTo)) throw new TypeError(`${route}: payTo "${payTo}" is not an EVM address`)
+    if (!isAddress(payTo) || getAddress(payTo) === zeroAddress) {
+      throw new TypeError(`${route}: payTo "${payTo}" is not a usable EVM address`)
+    }
+    const window = maxTimeoutSeconds ?? 300
+    if (!Number.isInteger(window) || window <= 0 || window > MAX_PAYMENT_WINDOW_SECONDS) {
+      throw new RangeError(
+        `${route}: maxTimeoutSeconds must be a whole number from 1 to ${MAX_PAYMENT_WINDOW_SECONDS}`,
+      )
+    }
     config[route] = {
       accepts: {
         scheme: 'exact',
         network,
         payTo: getAddress(payTo),
         price: tgbpPrice(pence, token),
-        maxTimeoutSeconds: maxTimeoutSeconds ?? 300,
+        maxTimeoutSeconds: window,
       },
       ...(description === undefined ? {} : { description }),
       ...(mimeType === undefined ? {} : { mimeType }),
       extensions: declareEip2612GasSponsoringExtension(),
     }
   }
-  const server = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme())
+  const server = new x402ResourceServer(
+    facilitator ?? new HTTPFacilitatorClient({ url: X402_ORG_FACILITATOR_URL }),
+  ).register(network, new ExactEvmScheme())
   return paymentMiddleware(config, server, undefined, undefined, syncFacilitatorOnStart)
 }

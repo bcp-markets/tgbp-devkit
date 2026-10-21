@@ -16,6 +16,7 @@ import {
   type PublicClient,
   verifyTypedData,
   type WalletClient,
+  zeroAddress,
 } from 'viem'
 import { foundry } from 'viem/chains'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -55,13 +56,28 @@ function fakeFacilitator(network: string) {
   return { facilitator, calls, refuseWith: (reason: string) => (refuse = reason) }
 }
 
-async function serve(app: express.Express): Promise<{ url: string; close: () => void }> {
+async function serve(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo
-      resolve({ url: `http://127.0.0.1:${port}`, close: () => server.close() })
+      const close = () =>
+        new Promise<void>((done) => {
+          server.close(() => done())
+          server.closeAllConnections()
+        })
+      resolve({ url: `http://127.0.0.1:${port}`, close })
     })
   })
+}
+
+/** A server that answers every request with 402 and these terms, to test what the client refuses to sign. */
+async function serveTerms(paymentRequired: Record<string, unknown>) {
+  const app = express()
+  app.use((_req, res) => {
+    const header = Buffer.from(JSON.stringify(paymentRequired)).toString('base64')
+    res.status(402).set('PAYMENT-REQUIRED', header).json({})
+  })
+  return serve(app)
 }
 
 function decodeHeader(value: string | null): Record<string, unknown> {
@@ -118,14 +134,39 @@ describe('tgbpPaymentMiddleware', () => {
         extensions: { eip2612GasSponsoring: expect.any(Object) },
       })
     } finally {
-      server.close()
+      await server.close()
     }
+  })
+
+  it('refuses a mainnet token without an explicit facilitator', () => {
+    expect(() =>
+      tgbpPaymentMiddleware({
+        routes: { 'GET /x': { pence: 1, payTo: PAY_TO } },
+        token: { ...TGBP_BASE_SEPOLIA, network: 'mainnet' },
+      }),
+    ).toThrow(TypeError)
+  })
+
+  it('refuses a payment window over 600 seconds', () => {
+    const { facilitator } = fakeFacilitator('eip155:84532')
+    expect(() =>
+      tgbpPaymentMiddleware({
+        routes: { 'GET /x': { pence: 1, payTo: PAY_TO, maxTimeoutSeconds: 601 } },
+        facilitator,
+      }),
+    ).toThrow(RangeError)
   })
 
   it('refuses a payTo that is not an EVM address', () => {
     const { facilitator } = fakeFacilitator('eip155:84532')
     expect(() =>
       tgbpPaymentMiddleware({ routes: { 'GET /x': { pence: 1, payTo: 'nope' } }, facilitator }),
+    ).toThrow(TypeError)
+    expect(() =>
+      tgbpPaymentMiddleware({
+        routes: { 'GET /x': { pence: 1, payTo: zeroAddress } },
+        facilitator,
+      }),
     ).toThrow(TypeError)
   })
 })
@@ -175,17 +216,45 @@ describe('createTgbpPaymentFetch', () => {
     const app = express()
     app.use(
       tgbpPaymentMiddleware({
-        routes: { 'GET /quote': { pence: 5, payTo: PAY_TO } },
+        routes: {
+          'GET /quote': { pence: 5, payTo: PAY_TO },
+          'POST /echo': { pence: 5, payTo: PAY_TO },
+          'GET /broken': { pence: 5, payTo: PAY_TO },
+        },
         token,
         facilitator: fake.facilitator,
       }),
     )
     app.get('/quote', (_req, res) => res.json({ quote: 'paid' }))
+    app.post('/echo', express.text(), (req, res) => res.json({ echo: req.body }))
+    app.get('/broken', (_req, res) => res.status(500).json({ error: 'handler failed' }))
     app.get('/free', (_req, res) => res.json({ quote: 'free' }))
     server = await serve(app)
   })
 
   afterEach(() => server.close())
+
+  /** Valid terms for the anvil token, for a test to spoil one field of. */
+  const terms = (
+    accept: Record<string, unknown> = {},
+    extensions: unknown = { eip2612GasSponsoring: {} },
+  ) => ({
+    x402Version: 2,
+    resource: { url: 'http://127.0.0.1/quote' },
+    accepts: [
+      {
+        scheme: 'exact',
+        network: `eip155:${foundry.id}`,
+        asset: token.address,
+        amount: FIVE_PENCE.toString(),
+        payTo: PAY_TO,
+        maxTimeoutSeconds: 300,
+        extra: { name: 'tGBP', version: '1', assetTransferMethod: 'permit2' },
+        ...accept,
+      },
+    ],
+    ...(extensions === null ? {} : { extensions }),
+  })
 
   async function admin(
     functionName: 'mint' | 'setPaused' | 'setBanned',
@@ -298,8 +367,10 @@ describe('createTgbpPaymentFetch', () => {
 
   it('throws PAYMENT_REFUSED with the reason when the facilitator rejects the payment', async () => {
     fake.refuseWith('permit2_invalid_signature')
-    await expect(pay()(`${server.url}/quote`)).rejects.toMatchObject({
+    const error = await pay()(`${server.url}/quote`).catch((e: unknown) => e)
+    expect(error).toMatchObject({
       code: 'PAYMENT_REFUSED',
+      details: { payer, payTo: PAY_TO, amount: FIVE_PENCE, deadline: expect.any(Number) },
     })
     expect(fake.calls.settle).toHaveLength(0)
   })
@@ -314,5 +385,87 @@ describe('createTgbpPaymentFetch', () => {
     await expect(wrongToken(`${server.url}/quote`)).rejects.toMatchObject({
       code: 'PAYMENT_NOT_OFFERED',
     })
+  })
+
+  it('sends a POST body again with the payment', async () => {
+    const { response } = await pay()(`${server.url}/echo`, { method: 'POST', body: 'hello' })
+    expect(await response.json()).toEqual({ echo: 'hello' })
+  })
+
+  it('throws PAYMENT_UNCONFIRMED with the deadline when the paid request reports no settlement', async () => {
+    await expect(pay()(`${server.url}/broken`)).rejects.toMatchObject({
+      code: 'PAYMENT_UNCONFIRMED',
+      details: { payer, amount: FIVE_PENCE, deadline: expect.any(Number) },
+    })
+  })
+
+  it('makes concurrent payments one at a time, so both settle', async () => {
+    const payOnce = pay()
+    const results = await Promise.all([
+      payOnce(`${server.url}/quote`),
+      payOnce(`${server.url}/quote`),
+    ])
+    expect(results.map((r) => r.response.status)).toEqual([200, 200])
+    expect(fake.calls.settle).toHaveLength(2)
+  })
+
+  it('refuses a 402 served by another origin after a redirect', async () => {
+    const elsewhere = express()
+    elsewhere.get('/go', (_req, res) => res.redirect(`${server.url}/quote`))
+    const redirector = await serve(elsewhere)
+    try {
+      await expect(pay()(`${redirector.url}/go`)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_OFFERED',
+      })
+      expect(fake.calls.verify).toHaveLength(0)
+    } finally {
+      await redirector.close()
+    }
+  })
+
+  it.each([
+    ['a payment window over 600 seconds', { maxTimeoutSeconds: 601 }],
+    ['a payment window given as a string', { maxTimeoutSeconds: '300' }],
+    ['an amount in hex', { amount: '0x10' }],
+    ['a zero amount', { amount: '0' }],
+    [
+      'another EIP-712 domain',
+      { extra: { name: 'Other', version: '1', assetTransferMethod: 'permit2' } },
+    ],
+    ['the EIP-3009 transfer method', { extra: { name: 'tGBP', version: '1' } }],
+  ])('refuses to sign %s', async (_label, spoil) => {
+    const crafted = await serveTerms(terms(spoil))
+    try {
+      await expect(pay()(`${crafted.url}/quote`)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_OFFERED',
+      })
+    } finally {
+      await crafted.close()
+    }
+  })
+
+  it('refuses when the server offers no gas sponsoring and Permit2 has no allowance', async () => {
+    const crafted = await serveTerms(terms({}, null))
+    try {
+      await expect(pay()(`${crafted.url}/quote`)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_OFFERED',
+        details: { allowance: 0n },
+      })
+    } finally {
+      await crafted.close()
+    }
+  })
+
+  it('throws PAYMENT_NOT_OFFERED when a 402 carries no x402 terms', async () => {
+    const plain = express()
+    plain.use((_req, res) => res.status(402).send('pay me'))
+    const bare = await serve(plain)
+    try {
+      await expect(pay()(`${bare.url}/quote`)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_OFFERED',
+      })
+    } finally {
+      await bare.close()
+    }
   })
 })
