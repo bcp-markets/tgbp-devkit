@@ -171,7 +171,7 @@ does not allow.
 > **The policy is enforced client-side.** The kit checks it inside the MCP server's process,
 > before it signs or calls the API. tGBP API keys carry no scopes, so anyone who holds the API key
 > or the wallet key can act without the policy. Give the agent the MCP server only, never the
-> keys themselves.
+> keys themselves, and no shell or file access to the server's environment or its MCP config.
 
 ```json
 {
@@ -206,12 +206,14 @@ A refused action returns `SPEND_POLICY_DENIED` with the rule, before anything is
 append-only JSON Lines file, before it signs or sends. An action that then fails stays counted, so
 the ledger may overstate the day's spend but never understate it. If the ledger cannot be read or
 written, every value-moving action is refused with `rule: 'ledger'`. A lock file stops two
-processes that share a ledger from both spending the last of the cap.
+processes that share a ledger from both spending the last of the cap. The kit never breaks a lock
+on its own: if a process dies holding `<ledger>.lock`, actions are refused until you delete it.
 
 **Human approval.** A redemption above `redemptionApprovalAbove` asks the human through the MCP
 client ([elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)).
 A "no", no answer before the timeout, and a client that cannot ask all refuse it. A timeout never
-approves.
+approves. The threshold applies to each redemption; the daily cap bounds what several smaller
+ones can add up to.
 
 ### Running the server
 
@@ -220,7 +222,7 @@ approves.
   "mcpServers": {
     "tgbp": {
       "command": "npx",
-      "args": ["-y", "-p", "@tgbp/kit", "-p", "viem", "-p", "@modelcontextprotocol/sdk", "-p", "zod", "tgbp-mcp"],
+      "args": ["-y", "-p", "@tgbp/kit", "-p", "viem@2", "-p", "@modelcontextprotocol/sdk@1", "-p", "zod@4", "tgbp-mcp"],
       "env": {
         "TGBP_POLICY_FILE": "/path/to/spend-policy.json",
         "TGBP_API_KEY": "…",
@@ -240,13 +242,14 @@ approves.
 | `TGBP_ENVIRONMENT` | `sandbox` (default) or `production`. |
 | `TGBP_SWAP_BASE_URL` | The swap host. Production uses its own; the sandbox needs this set to swap. |
 | `TGBP_EVM_PRIVATE_KEY` | The agent's wallet. Enables balance, transfer and redeem. |
-| `TGBP_RPC_URL_<CHAIN>` | An RPC URL for each chain, e.g. `TGBP_RPC_URL_SEPOLIA`. |
+| `TGBP_RPC_URL_<CHAIN>` | An RPC URL for each chain: the chain key in capitals, `-` as `_`, e.g. `TGBP_RPC_URL_ARBITRUM_SEPOLIA`. |
 | `TGBP_APPROVAL_TIMEOUT_SECONDS` | How long a redemption waits for a human. Default 300. |
 
 The tools are `tgbp_policy`, `tgbp_balance`, `tgbp_transfer`, `tgbp_mint`, `tgbp_redeem` and
 `tgbp_swap`. On-chain actions run on EVM chains. `tgbp_redeem` creates the redemption, then
 burns the tGBP by sending it to the redemption's burn address. `tgbp_swap` converts a deposit the
-swap API has already confirmed.
+swap API has already confirmed. `tgbp_mint` and `tgbp_swap` take an optional `idempotencyKey`:
+after an ambiguous failure, retry with the key from the error to get the first record back.
 
 ### Skills
 
@@ -256,6 +259,8 @@ policy refuses: report the rule and stop. Copy them into your agent's skills dir
 ship in the npm package too.
 
 ### Using the policy without MCP
+
+`@tgbp/kit/agent` needs `viem`.
 
 ```ts
 import { createAgentActions, createSpendGuard, loadSpendPolicy } from '@tgbp/kit/agent'

@@ -5,14 +5,14 @@
  *
  * On-chain actions run on EVM chains.
  */
-import type { PublicClient, WalletClient } from 'viem'
+import { isAddress, type PublicClient, type WalletClient } from 'viem'
 
 import { formatAmount, parseAmount } from '../amount.js'
 import type { CreateResult, Mint, Redemption, TgbpClient } from '../api/client.js'
 import type { Conversion, TgbpSwapClient } from '../api/swap.js'
 import { isTgbpKitError, TgbpKitError } from '../errors.js'
 import { getBalance, transfer } from '../evm/index.js'
-import { type EvmTokenDeployment, getEvmToken } from '../registry/index.js'
+import { type EvmTokenDeployment, getEvmToken, getToken } from '../registry/index.js'
 import type { SpendGuard } from './guard.js'
 
 export interface EvmClients {
@@ -35,6 +35,9 @@ export type SwapDirection = 'USDC_TO_TGBP' | 'TGBP_TO_USDC'
 
 /** The API takes GBP to the penny. */
 const GBP_DECIMALS = 2
+const USDC_DECIMALS = 6
+/** The chains the swap API serves (its ChainId). */
+const SWAP_CHAINS = ['base', 'sepolia'] as const
 
 export function createAgentActions(options: AgentActionsOptions) {
   const { guard } = options
@@ -65,11 +68,12 @@ export function createAgentActions(options: AgentActionsOptions) {
     async transfer(params: { chain: string; to: string; amount: string }) {
       const token = getEvmToken(params.chain)
       const baseUnits = parseAmount(params.amount, token.decimals)
+      const amount = formatAmount(baseUnits, token.decimals)
       await guard.authorize({
         action: 'transfer',
         chain: token.chain,
         destination: params.to,
-        amount: params.amount,
+        amount,
       })
       const { hash } = await transfer({
         ...evmClients(token),
@@ -77,47 +81,58 @@ export function createAgentActions(options: AgentActionsOptions) {
         to: params.to,
         amount: baseUnits,
       })
-      return { chain: token.chain, to: params.to, amount: params.amount, hash }
+      return { chain: token.chain, to: params.to, amount, hash }
     },
 
-    /** Create a mint: tGBP goes to `destinationAddress` once the bank transfer arrives. */
+    /**
+     * Create a mint: tGBP goes to `destinationAddress` once the bank transfer
+     * arrives. Pass back the `idempotencyKey` of an earlier attempt to retry it
+     * without creating a second mint.
+     */
     async mint(params: {
       chain: string
       destinationAddress: string
       amount: string
       customerId?: string
+      idempotencyKey?: string
     }): Promise<CreateResult<Mint>> {
       const api = requireApi()
-      const value = gbpValue(params.amount)
+      const token = getToken(params.chain)
+      const { amount, value } = gbp(params.amount)
       await guard.authorize({
         action: 'mint',
-        chain: params.chain,
+        chain: token.chain,
         destination: params.destinationAddress,
-        amount: params.amount,
+        amount,
       })
-      return api.mints.create({
-        chain: params.chain,
-        destinationAddress: params.destinationAddress,
-        amount: { currency: 'GBP', value },
-        ...(params.customerId ? { customerId: params.customerId } : {}),
-      })
+      return api.mints.create(
+        {
+          chain: token.chain,
+          destinationAddress: params.destinationAddress,
+          amount: { currency: 'GBP', value },
+          ...(params.customerId ? { customerId: params.customerId } : {}),
+        },
+        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {},
+      )
     },
 
     /**
      * Create a redemption, then burn the tGBP by sending it to the
-     * redemption's burn address. GBP is paid to `bankId` once the burn confirms.
+     * redemption's burn address. GBP is paid to `bankId` once the burn
+     * confirms. Nothing is burned unless the API's redemption matches the
+     * request: its chain, amount and bank account.
      */
     async redeem(params: { chain: string; bankId: string; amount: string; reference?: string }) {
       const api = requireApi()
-      const value = gbpValue(params.amount)
       const token = getEvmToken(params.chain)
-      const baseUnits = parseAmount(params.amount, token.decimals)
+      const { amount, value } = gbp(params.amount)
+      const baseUnits = parseAmount(amount, token.decimals)
       const clients = evmClients(token)
       await guard.authorize({
         action: 'redeem',
         chain: token.chain,
         destination: params.bankId,
-        amount: params.amount,
+        amount,
       })
       const created = await api.redemptions.create({
         chain: token.chain,
@@ -127,6 +142,7 @@ export function createAgentActions(options: AgentActionsOptions) {
       })
       if (created.status === 'pending_approval') return { redemption: created }
       const redemption: Redemption = created.data
+      assertRedemptionMatches(redemption, token, params.bankId, amount)
       try {
         const { hash } = await transfer({
           ...clients,
@@ -143,6 +159,7 @@ export function createAgentActions(options: AgentActionsOptions) {
     /**
      * Convert a confirmed swap deposit and settle it to `recipient`. `amount`
      * is the source amount: tGBP for TGBP_TO_USDC, USDC for USDC_TO_TGBP.
+     * Pass back the `idempotencyKey` of an earlier attempt to retry it.
      */
     async swap(params: {
       chain: string
@@ -150,34 +167,80 @@ export function createAgentActions(options: AgentActionsOptions) {
       amount: string
       recipient: string
       minOut?: string
+      idempotencyKey?: string
     }): Promise<{ data: Conversion; idempotencyKey: string }> {
       if (!options.swap) throw new Error('No swap API is configured')
+      const chain = getEvmToken(params.chain).chain
+      const swapChain = SWAP_CHAINS.find((c) => c === chain)
+      if (!swapChain) {
+        throw new TgbpKitError('UNKNOWN_CHAIN', `The swap API does not serve "${chain}"`, {
+          details: { chain, supported: SWAP_CHAINS },
+        })
+      }
+      if (!isAddress(params.recipient)) {
+        throw new TgbpKitError(
+          'WRONG_CHAIN_ADDRESS',
+          `"${params.recipient}" is not an EVM address`,
+          {
+            details: { chain, address: params.recipient },
+          },
+        )
+      }
+      const decimals = params.direction === 'USDC_TO_TGBP' ? USDC_DECIMALS : 18
+      const amount = formatAmount(parseAmount(params.amount, decimals), decimals)
       // Caps are in pounds. A USDC amount counts as the same number of pounds,
       // which overstates it while a dollar is worth less than a pound.
-      parseAmount(params.amount, params.direction === 'USDC_TO_TGBP' ? 6 : 18)
       await guard.authorize({
         action: 'swap',
-        chain: params.chain,
+        chain,
         destination: params.recipient,
-        amount: params.amount,
+        amount,
       })
       const amountField = params.direction === 'USDC_TO_TGBP' ? 'usdcAmount' : 'tgbpAmount'
-      return options.swap.createConversion({
-        chainId: params.chain as Parameters<TgbpSwapClient['createConversion']>[0]['chainId'],
-        direction: params.direction,
-        recipientAddress: params.recipient as `0x${string}`,
-        [amountField]: params.amount,
-        ...(params.minOut ? { minOut: params.minOut } : {}),
-      })
+      return options.swap.createConversion(
+        {
+          chainId: swapChain,
+          direction: params.direction,
+          recipientAddress: params.recipient,
+          [amountField]: amount,
+          ...(params.minOut ? { minOut: params.minOut } : {}),
+        },
+        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {},
+      )
     },
   }
 }
 
 export type AgentActions = ReturnType<typeof createAgentActions>
 
-function gbpValue(amount: string): number {
-  parseAmount(amount, GBP_DECIMALS)
-  return Number(amount)
+/** A GBP amount as its canonical string and the number the API takes. */
+function gbp(input: string): { amount: string; value: number } {
+  const pence = parseAmount(input, GBP_DECIMALS)
+  if (pence > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError(`"${input}" is too large`)
+  const amount = formatAmount(pence, GBP_DECIMALS)
+  return { amount, value: Number(amount) }
+}
+
+function assertRedemptionMatches(
+  redemption: Redemption,
+  token: EvmTokenDeployment,
+  bankId: string,
+  amount: string,
+): void {
+  const mismatch = (field: string) =>
+    new Error(
+      `Redemption ${redemption.redemptionId} does not match the request (${field}); nothing was burned. Cancel it.`,
+    )
+  if (redemption.chain !== token.chain) throw mismatch('chain')
+  if (redemption.bankAccount && redemption.bankAccount.id !== bankId) throw mismatch('bank')
+  let returned: bigint
+  try {
+    returned = parseAmount(redemption.amount.amount, GBP_DECIMALS)
+  } catch {
+    throw mismatch('amount')
+  }
+  if (returned !== parseAmount(amount, GBP_DECIMALS)) throw mismatch('amount')
+  if (!isAddress(redemption.burnAddress)) throw mismatch('burn address')
 }
 
 /** Keep the original code, and add the redemption id the caller needs to recover. */

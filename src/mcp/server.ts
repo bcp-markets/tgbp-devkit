@@ -9,7 +9,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
 import { type AgentActionsOptions, createAgentActions } from '../agent/actions.js'
-import { type Approver, createSpendGuard } from '../agent/guard.js'
+import { type Approver, createSpendGuard, DEFAULT_APPROVAL_TIMEOUT_MS } from '../agent/guard.js'
 import type { SpendPolicy } from '../agent/policy.js'
 import { isTgbpKitError } from '../errors.js'
 import { KIT_VERSION } from '../version.js'
@@ -24,11 +24,17 @@ export interface TgbpMcpServerOptions extends Omit<AgentActionsOptions, 'guard'>
   now?: () => Date
 }
 
-const chain = z.string().describe('Registry chain key, e.g. "sepolia"')
-const amount = z.string().describe('Decimal amount, e.g. "12.50"')
+/** Bounds every free-text argument, so an agent cannot hand the parsers a megabyte string. */
+const text = () => z.string().max(200)
+const chain = text().describe('Registry chain key, e.g. "sepolia"')
+const amount = text().describe('Decimal amount, e.g. "12.50"')
+const idempotencyKey = text()
+  .optional()
+  .describe('To retry an earlier attempt, pass its idempotencyKey; never for a new one')
 
 export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const server = new McpServer({ name: 'tgbp', version: KIT_VERSION })
+  const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
 
   const approver: Approver = async (request, signal) => {
     if (!server.server.getClientCapabilities()?.elicitation) return false
@@ -45,7 +51,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           required: ['approve'],
         },
       },
-      { signal, timeout: options.approvalTimeoutMs },
+      { signal, timeout: approvalTimeoutMs },
     )
     return result.action === 'accept' && result.content?.approve === true
   }
@@ -54,9 +60,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     policy: options.policy,
     ledgerPath: options.ledgerPath,
     approver,
-    ...(options.approvalTimeoutMs !== undefined
-      ? { approvalTimeoutMs: options.approvalTimeoutMs }
-      : {}),
+    approvalTimeoutMs,
     ...(options.now ? { now: options.now } : {}),
   })
   const actions = createAgentActions({ ...options, guard })
@@ -77,7 +81,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     {
       title: 'Read a tGBP balance',
       description: "The tGBP balance of an address, or of this agent's own wallet.",
-      inputSchema: { chain, owner: z.string().optional().describe('Defaults to the agent wallet') },
+      inputSchema: { chain, owner: text().optional().describe('Defaults to the agent wallet') },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     (args) => run(() => actions.balance(args)),
@@ -89,7 +93,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       title: 'Send tGBP',
       description:
         "Send tGBP from this agent's wallet to an allowed destination. Counts against the per-transfer and daily caps.",
-      inputSchema: { chain, to: z.string().describe('Recipient address'), amount },
+      inputSchema: { chain, to: text().describe('Recipient address'), amount },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
     (args) => run(() => actions.transfer(args)),
@@ -103,9 +107,10 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         'Create a mint. The result carries bank transfer details; tGBP is minted to the destination once that GBP arrives.',
       inputSchema: {
         chain,
-        destinationAddress: z.string().describe('Where the tGBP is minted to'),
+        destinationAddress: text().describe('Where the tGBP is minted to'),
         amount: amount.describe('GBP, to the penny, e.g. "100.00"'),
-        customerId: z.string().optional(),
+        customerId: text().optional(),
+        idempotencyKey,
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
@@ -120,9 +125,9 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         'Create a redemption and burn the tGBP from this wallet. GBP is paid to the bank account once the burn confirms. A redemption above the approval threshold waits for a human.',
       inputSchema: {
         chain,
-        bankId: z.string().describe('The bank account id the GBP is paid to'),
+        bankId: text().describe('The bank account id the GBP is paid to'),
         amount: amount.describe('GBP, to the penny, e.g. "50.00"'),
-        reference: z.string().optional(),
+        reference: text().optional(),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
@@ -139,8 +144,9 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         chain,
         direction: z.enum(['USDC_TO_TGBP', 'TGBP_TO_USDC']),
         amount: amount.describe('The source amount: tGBP or USDC'),
-        recipient: z.string().describe('Where the swapped tokens go'),
-        minOut: z.string().optional().describe('Refuse the swap if it pays out less than this'),
+        recipient: text().describe('Where the swapped tokens go'),
+        minOut: text().optional().describe('Refuse the swap if it pays out less than this'),
+        idempotencyKey,
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
@@ -166,8 +172,18 @@ function ok(value: unknown): CallToolResult {
 function failure(error: unknown): CallToolResult {
   const body = isTgbpKitError(error)
     ? { code: error.code, message: error.message, details: error.details }
-    : { message: error instanceof Error ? error.message : String(error) }
+    : { message: plainMessage(error) }
   return { isError: true, content: [{ type: 'text', text: toJson(body) }] }
+}
+
+/**
+ * viem's full message carries the RPC URL, which often holds a provider key;
+ * its short message does not.
+ */
+function plainMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const short = (error as { shortMessage?: unknown }).shortMessage
+  return typeof short === 'string' ? short : error.message
 }
 
 function toJson(value: unknown): string {

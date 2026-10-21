@@ -158,11 +158,13 @@ describe('createSpendGuard', () => {
     expect(await refusal(guard().authorize(transfer('1')))).toBe('ledger')
   })
 
-  it('clears a lock left by a process that died', async () => {
+  it('refuses, and never breaks the lock, while another process holds it', async () => {
     await writeFile(`${ledgerPath}.lock`, '')
     const old = new Date(Date.now() - 60_000)
     await utimes(`${ledgerPath}.lock`, old, old)
-    await expect(guard().authorize(transfer('1'))).resolves.toBeUndefined()
+    expect(await refusal(guard({ ledgerLockWaitMs: 50 }).authorize(transfer('1')))).toBe('ledger')
+    await expect(readFile(`${ledgerPath}.lock`)).resolves.toBeDefined()
+    await expect(readFile(ledgerPath)).rejects.toThrow()
   })
 
   it('leaves balance reads out of the ledger', async () => {
@@ -209,6 +211,8 @@ describe('redemption approval', () => {
     const g = guard({ approver, approvalTimeoutMs: 20 })
     expect(await refusal(g.authorize(redeem('80')))).toBe('redemptionApprovalAbove')
     expect(aborted).toBe(true)
+    // Let the late yes arrive; it must change nothing.
+    await new Promise((resolve) => setTimeout(resolve, 120))
     await expect(readFile(ledgerPath)).rejects.toThrow()
   })
 

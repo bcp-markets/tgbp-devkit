@@ -39,27 +39,42 @@ const POLICY: SpendPolicy = {
 const api = {
   mints: { create: vi.fn() },
   redemptions: {
-    create: vi.fn(async () => ({
-      status: 'created',
-      data: { redemptionId: 'red_1', burnAddress: BURN },
-      idempotencyKey: 'key_1',
-    })),
+    create: vi.fn(async (): Promise<unknown> => created()),
   },
 }
-const swap = { createConversion: vi.fn() }
+function created(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'created',
+    data: {
+      redemptionId: 'red_1',
+      burnAddress: BURN,
+      chain: 'sepolia',
+      amount: { amount: '80.00', currency: 'GBP' },
+      bankAccount: { id: 'bank_ok', name: 'Ops', type: 'gbp' },
+      ...overrides,
+    },
+    idempotencyKey: 'key_1',
+  }
+}
+const swap = { createConversion: vi.fn(async () => ({ data: {}, idempotencyKey: 'k' })) }
 const evm = vi.fn(() => ({
   publicClient: {},
   walletClient: { account: { address: AGENT } },
 }))
 
 let dir: string
+let clients: Client[] = []
 
 beforeEach(async () => {
   vi.clearAllMocks()
   dir = await mkdtemp(join(tmpdir(), 'tgbp-mcp-'))
 })
 
-afterEach(() => rm(dir, { recursive: true, force: true }))
+afterEach(async () => {
+  await Promise.all(clients.map((c) => c.close()))
+  clients = []
+  await rm(dir, { recursive: true, force: true })
+})
 
 type ElicitAnswer = 'approve' | 'decline' | 'never'
 
@@ -90,6 +105,7 @@ async function connect(
   }
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
   await Promise.all([server.connect(serverSide), client.connect(clientSide)])
+  clients.push(client)
   return client
 }
 
@@ -227,6 +243,78 @@ describe('redemption over the approval threshold', () => {
     })
     expect(chain.transfer).toHaveBeenCalledWith(
       expect.objectContaining({ to: BURN, amount: 80_000_000_000_000_000_000n }),
+    )
+  })
+})
+
+describe('redemption checks after the API answers', () => {
+  const redeem = { chain: 'sepolia', bankId: 'bank_ok', amount: '50' }
+
+  it('burns nothing when the API needs a second approver', async () => {
+    api.redemptions.create.mockResolvedValueOnce({
+      status: 'pending_approval',
+      approvalRequestId: 'apr_1',
+      idempotencyKey: 'key_1',
+    })
+    const { isError, body } = await call(await connect(), 'tgbp_redeem', redeem)
+    expect(isError).toBe(false)
+    expect(body.redemption.status).toBe('pending_approval')
+    expect(chain.transfer).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['amount', { amount: { amount: '5000.00', currency: 'GBP' } }],
+    ['chain', { chain: 'base' }],
+    ['bank', { bankAccount: { id: 'bank_other', name: 'x', type: 'gbp' } }],
+    ['burn address', { burnAddress: 'not-an-address' }],
+  ])(
+    'burns nothing when the redemption does not match the request (%s)',
+    async (field, overrides) => {
+      api.redemptions.create.mockResolvedValueOnce(
+        created({ amount: { amount: '50.00', currency: 'GBP' }, ...overrides }),
+      )
+      const { isError, body } = await call(await connect(), 'tgbp_redeem', redeem)
+      expect(isError).toBe(true)
+      expect(body.message).toContain(`(${field})`)
+      expect(chain.transfer).not.toHaveBeenCalled()
+    },
+  )
+
+  it('names the redemption when its burn fails', async () => {
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    const { TgbpKitError } = await import('../src/errors.js')
+    chain.transfer.mockRejectedValueOnce(new TgbpKitError('INSUFFICIENT_BALANCE', 'too little'))
+    const { body } = await call(await connect(), 'tgbp_redeem', redeem)
+    expect(body.code).toBe('INSUFFICIENT_BALANCE')
+    expect(body.details.redemptionId).toBe('red_1')
+  })
+})
+
+describe('swap and mint input', () => {
+  it('refuses a chain the swap API does not serve before asking the policy', async () => {
+    const { body } = await call(await connect(), 'tgbp_swap', {
+      chain: 'arbitrum-sepolia',
+      direction: 'TGBP_TO_USDC',
+      amount: '10',
+      recipient: AGENT,
+    })
+    expect(body.code).toBe('UNKNOWN_CHAIN')
+    expectNothingSent()
+  })
+
+  it('sends the canonical amount and passes the idempotency key back to the API', async () => {
+    await call(await connect(), 'tgbp_swap', {
+      chain: 'sepolia',
+      direction: 'TGBP_TO_USDC',
+      amount: ' 010.50 ',
+      recipient: AGENT,
+      idempotencyKey: 'retry_1',
+    })
+    expect(swap.createConversion).toHaveBeenCalledWith(
+      expect.objectContaining({ chainId: 'sepolia', tgbpAmount: '10.5' }),
+      { idempotencyKey: 'retry_1' },
     )
   })
 })

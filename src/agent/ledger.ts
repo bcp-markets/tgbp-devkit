@@ -5,7 +5,7 @@
  * An action is recorded before it is signed or sent, and stays recorded if it
  * then fails: the ledger may overstate what was spent, never understate it.
  */
-import { appendFile, open, readFile, stat, unlink } from 'node:fs/promises'
+import { open, readFile, unlink } from 'node:fs/promises'
 
 import { type SpendAction, toPolicyUnits } from './policy.js'
 
@@ -23,13 +23,18 @@ export interface LedgerEntry {
 
 export type ReserveResult = { ok: true } | { ok: false; spent: bigint }
 
-/** A lock older than this is from a process that died holding it. */
-const STALE_LOCK_MS = 30_000
 const LOCK_WAIT_MS = 5_000
 const LOCK_RETRY_MS = 25
 
 export class SpendLedger {
-  constructor(readonly path: string) {}
+  /**
+   * `lockWaitMs` is how long to wait for another process to release the
+   * ledger lock before refusing.
+   */
+  constructor(
+    readonly path: string,
+    private readonly lockWaitMs = LOCK_WAIT_MS,
+  ) {}
 
   /** What the ledger records as spent on `day`, at `POLICY_DECIMALS`. Throws if it cannot be read. */
   async spentOn(day: string): Promise<bigint> {
@@ -39,13 +44,20 @@ export class SpendLedger {
   /**
    * Record `entry` if it keeps `entry.day` within `cap`. The read, the check
    * and the append run under a lock file, so two processes sharing a ledger
-   * cannot both spend the last of the cap.
+   * cannot both spend the last of the cap. The append is synced to disk
+   * before this resolves, so a crash after it cannot lose the record.
    */
   async reserve(entry: LedgerEntry, cap: bigint): Promise<ReserveResult> {
     return this.withLock(async () => {
       const spent = sumDay(await this.read(), entry.day)
       if (spent + toPolicyUnits(entry.amount) > cap) return { ok: false, spent }
-      await appendFile(this.path, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 })
+      const handle = await open(this.path, 'a', 0o600)
+      try {
+        await handle.write(`${JSON.stringify(entry)}\n`)
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
       return { ok: true }
     })
   }
@@ -65,9 +77,14 @@ export class SpendLedger {
       .map((line, index) => parseEntry(line, index + 1, this.path))
   }
 
+  /**
+   * Only the holder ever removes the lock. A lock left by a process that died
+   * is never broken automatically, because a slow holder looks the same; the
+   * ledger refuses until someone who knows the process is gone deletes it.
+   */
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     const lockPath = `${this.path}.lock`
-    const deadline = Date.now() + LOCK_WAIT_MS
+    const deadline = Date.now() + this.lockWaitMs
     for (;;) {
       try {
         const handle = await open(lockPath, 'wx', 0o600)
@@ -75,20 +92,18 @@ export class SpendLedger {
         break
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        const age = await lockAge(lockPath)
-        if (age !== undefined && age > STALE_LOCK_MS) {
-          await unlink(lockPath).catch(() => {})
-          continue
+        if (Date.now() > deadline) {
+          throw new Error(
+            `The ledger lock ${lockPath} is held. If no tgbp process is running, delete it.`,
+          )
         }
-        if (Date.now() > deadline)
-          throw new Error(`Timed out waiting for the ledger lock ${lockPath}`)
         await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
       }
     }
     try {
       return await fn()
     } finally {
-      await unlink(lockPath).catch(() => {})
+      await unlink(lockPath)
     }
   }
 }
@@ -122,13 +137,4 @@ function parseEntry(line: string, lineNumber: number, path: string): LedgerEntry
     throw new Error(`${path}:${lineNumber} has a malformed amount`, { cause: error })
   }
   return entry as LedgerEntry
-}
-
-async function lockAge(lockPath: string): Promise<number | undefined> {
-  try {
-    return Date.now() - (await stat(lockPath)).mtimeMs
-  } catch {
-    // Released between our open and our stat: retry at once.
-    return undefined
-  }
 }

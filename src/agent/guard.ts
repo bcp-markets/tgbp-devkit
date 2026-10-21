@@ -63,6 +63,8 @@ export interface SpendGuardOptions {
   approver?: Approver
   /** How long to wait for a human before refusing. Default 5 minutes. */
   approvalTimeoutMs?: number
+  /** How long to wait for another process holding the ledger lock. Default 5 seconds. */
+  ledgerLockWaitMs?: number
   /** Clock, for tests. */
   now?: () => Date
 }
@@ -73,11 +75,11 @@ export interface SpendGuard {
   authorize(request: SpendRequest): Promise<void>
 }
 
-const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000
 
 export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
   const { policy } = options
-  const ledger = new SpendLedger(options.ledgerPath)
+  const ledger = new SpendLedger(options.ledgerPath, options.ledgerLockWaitMs)
   const now = options.now ?? (() => new Date())
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
   const expiresAt = Date.parse(policy.expiresAt)

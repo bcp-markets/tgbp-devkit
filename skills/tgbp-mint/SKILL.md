@@ -23,5 +23,6 @@ An error with `code: "SPEND_POLICY_DENIED"` names the refusing rule in `details.
 the user the rule and stop. Never split a mint into smaller ones to get under a cap, and never
 mint to a different address to get round a refusal.
 
-After an `API_ERROR` with a 5xx status, or `API_UNREACHABLE`, the mint may exist. Tell the user,
-and quote `details.idempotencyKey`; do not create a new mint.
+After an `API_ERROR` with a 5xx status, or `API_UNREACHABLE`, the mint may exist. Retry only by
+calling `tgbp_mint` with the same arguments and `idempotencyKey` set to `details.idempotencyKey`,
+which returns the first mint. Never retry without the key.
