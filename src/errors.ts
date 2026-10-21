@@ -34,6 +34,11 @@ export type TgbpErrorCode =
    * retry only with `details.idempotencyKey`, or read the record before sending anything new.
    */
   | 'API_UNREACHABLE'
+  /**
+   * The agent spend policy refused the action before anything was signed or sent.
+   * `details.rule` names the policy field that refused it.
+   */
+  | 'SPEND_POLICY_DENIED'
 
 export class TgbpKitError extends Error {
   readonly code: TgbpErrorCode
