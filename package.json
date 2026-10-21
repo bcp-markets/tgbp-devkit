@@ -1,7 +1,7 @@
 {
   "name": "@tgbp/kit",
   "version": "0.1.0",
-  "description": "tGBP, the tokenised British pound, for developers: token registry, on-chain balances, transfers and watchers on EVM chains and Solana, and a typed client for the mint, redeem and swap API.",
+  "description": "tGBP, the tokenised British pound, for developers: token registry, on-chain balances, transfers and watchers on EVM chains and Solana, a typed client for the mint, redeem and swap API, and an MCP server and agent skills with a client-side spend policy.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -16,7 +16,9 @@
     "gbp",
     "erc20",
     "solana",
-    "viem"
+    "viem",
+    "mcp",
+    "agent"
   ],
   "engines": {
     "node": ">=20"
@@ -24,6 +26,7 @@
   "packageManager": "pnpm@10.34.6",
   "files": [
     "dist",
+    "skills",
     "README.md",
     "LICENSE"
   ],
@@ -45,7 +48,18 @@
     "./api": {
       "types": "./dist/api/index.d.ts",
       "import": "./dist/api/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
     }
+  },
+  "bin": {
+    "tgbp-mcp": "./dist/mcp/cli.js"
   },
   "sideEffects": false,
   "scripts": {
@@ -62,6 +76,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@solana-program/token": "^0.18.0",
     "@solana/kit": "^8.5.0",
     "@types/node": "^22.20.5",
@@ -70,14 +85,20 @@
     "typescript": "^5.9.3",
     "viem": "^2.57.7",
     "vitest": "^5.0.5",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   },
   "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@solana-program/token": "^0.18.0",
     "@solana/kit": "^8.5.0",
-    "viem": "^2.57.7"
+    "viem": "^2.57.7",
+    "zod": "^4.6.5"
   },
   "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
     "@solana-program/token": {
       "optional": true
     },
@@ -85,6 +106,9 @@
       "optional": true
     },
     "viem": {
+      "optional": true
+    },
+    "zod": {
       "optional": true
     }
   }
