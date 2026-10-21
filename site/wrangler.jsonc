@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/wrangler@4.119.0/config-schema.json",
+  "name": "tgbp-devkit-site",
+  "compatibility_date": "2026-08-07",
+  "workers_dev": false,
+  "preview_urls": false,
+  // Static assets only: there is no Worker script, so every request is served from ./public.
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "404-page"
+  },
+  // The first deploy creates the DNS record and certificate for this hostname.
+  "routes": [{ "pattern": "dev.tokenisedgbp.com", "custom_domain": true }]
+}

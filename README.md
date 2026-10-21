@@ -430,6 +430,17 @@ redemption. It runs when `TGBP_SANDBOX_API_KEY` is set, with `TGBP_SANDBOX_CUSTO
 CI's `sandbox` job runs it on `main` and daily, with all four set as secrets in the `sandbox`
 environment.
 
+## Developer site
+
+`site/` is <https://dev.tokenisedgbp.com>: static pages served by a Cloudflare Worker with no
+script, only assets. The quickstart page embeds the scripts in `examples/quickstart/` verbatim, and
+`test/site.test.ts` fails when they drift apart or when a page is missing from `llms.txt`.
+
+```sh
+pnpm dlx wrangler@4.119.0 dev --cwd site      # serve locally
+pnpm dlx wrangler@4.119.0 deploy --cwd site   # publish; needs Cloudflare access
+```
+
 ## Security
 
 Report vulnerabilities as described at <https://tokenisedgbp.com/.well-known/security.txt>.
