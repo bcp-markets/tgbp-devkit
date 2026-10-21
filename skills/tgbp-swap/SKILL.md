@@ -17,6 +17,8 @@ deposit address must be in the policy's `destinations`.
    - `amount`: the source amount, in tGBP or USDC.
    - `recipient`: the address the swapped tokens go to.
    - `minOut` (optional): refuse the swap if it would pay out less.
+   - `idempotencyKey` (optional): only to retry a swap that failed with an unclear result, using
+     the key from that error. Never retry without it.
 3. Report the conversion to the user.
 
 The caps are in pounds. A USDC amount counts as the same number of pounds, so 100 USDC uses
