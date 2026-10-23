@@ -39,6 +39,18 @@ export type TgbpErrorCode =
    * `details.rule` names the policy field that refused it.
    */
   | 'SPEND_POLICY_DENIED'
+  /** An x402 server asked for payment, but offered no tGBP payment on the client's chain. */
+  | 'PAYMENT_NOT_OFFERED'
+  /** An x402 price is above the client's per-request limit, so the client did not pay. */
+  | 'PAYMENT_OVER_LIMIT'
+  /** The x402 server answered a signed payment with 402 again; `details.reason` says why. */
+  | 'PAYMENT_REFUSED'
+  /**
+   * The client signed an x402 payment, but the server reported no matching settlement. The
+   * payment may still settle until `details.deadline` (Unix seconds): check the payer's balance
+   * before retrying, because a retry may pay twice.
+   */
+  | 'PAYMENT_UNCONFIRMED'
 
 export class TgbpKitError extends Error {
   readonly code: TgbpErrorCode
