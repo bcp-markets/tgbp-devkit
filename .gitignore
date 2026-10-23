@@ -7,3 +7,5 @@ coverage/
 test/fixtures/out/
 test/fixtures/cache/
 *.tsbuildinfo
+.wrangler/
+.env
