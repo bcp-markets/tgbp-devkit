@@ -45,6 +45,21 @@ describe('token registry', () => {
     expect(getEvmTokenByChainId(8453).chain).toBe('base')
   })
 
+  it('lists test tGBP on Base Sepolia', () => {
+    expect(getToken('base-sepolia')).toEqual({
+      chain: 'base-sepolia',
+      family: 'evm',
+      network: 'testnet',
+      status: 'live',
+      symbol: 'tGBP',
+      decimals: 18,
+      chainId: 84532,
+      address: '0x27f6c8289550fCE67f6B50BeD1F519966aFE5287',
+      explorerUrl: 'https://sepolia.basescan.org',
+    })
+    expect(getEvmTokenByChainId(84532).chain).toBe('base-sepolia')
+  })
+
   it('throws UNKNOWN_CHAIN for a chain tGBP is not on', () => {
     expect(() => getToken('dogechain')).toThrow(expect.objectContaining({ code: 'UNKNOWN_CHAIN' }))
     let caught: unknown
