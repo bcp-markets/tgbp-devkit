@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tGBP developers</title>
-  <meta name="description" content="Build with tGBP, the tokenised British pound: a quickstart, the @tgbp/kit developer kit, the API reference and the developer community.">
+  <meta name="description" content="Build with tGBP, the tokenised British pound: a quickstart, the @tgbp/kit developer kit, agents, x402 payments, the API reference and the developer community.">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -54,6 +54,14 @@
           <td><code>@tgbp/kit/api</code></td>
           <td>A typed client for the tGBP API's mint, redeem, swap and balance endpoints. It sends idempotency keys and retries only what is safe to repeat. Needs the API key you get at onboarding.</td>
         </tr>
+        <tr>
+          <td><code>@tgbp/kit/agent</code>, <code>tgbp-mcp</code></td>
+          <td>An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP, inside a spend policy you write.</td>
+        </tr>
+        <tr>
+          <td><code>@tgbp/kit/x402/server</code>, <code>/client</code></td>
+          <td>Charge per HTTP request in tGBP, or pay such a request, with x402 on Base Sepolia.</td>
+        </tr>
       </tbody>
     </table>
     <p>
@@ -72,6 +80,35 @@
       which runs on testnets and simulates bank transfers. The
       <a href="https://github.com/bcp-markets/tgbp-devkit#mint-redeem-and-swap-api">README</a>
       shows a mint, a redemption and a swap quote.
+    </p>
+
+    <h2>Agents</h2>
+    <p>
+      <code>tgbp-mcp</code> is an MCP server that lets an LLM agent read balances and send, mint,
+      redeem and swap tGBP. Every tool runs behind a spend policy, a JSON file that refuses any
+      action it does not allow: by chain, destination, per-transfer cap and daily cap. A large
+      redemption waits for a human to approve it. One agent skill per action ships with the
+      package.
+    </p>
+    <p>
+      The policy runs inside the server's process. Give the agent the MCP server, never the API key
+      or the wallet key. Setup and every policy field are in the
+      <a href="https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy">README</a>.
+    </p>
+
+    <h2>x402 payments</h2>
+    <p>
+      <a href="https://x402.org">x402</a> lets an HTTP API charge per request, so an agent can pay
+      for a call without an account or an API key. <code>@tgbp/kit/x402/server</code> prices an
+      Express route in pence of tGBP, and <code>@tgbp/kit/x402/client</code> pays it. Both run on
+      Base Sepolia with test tGBP. The payer needs test tGBP but no ETH, because the facilitator
+      pays the gas.
+    </p>
+    <p>
+      The <a href="https://github.com/bcp-markets/tgbp-devkit#x402-payments-base-sepolia">README</a>
+      covers both sides. The
+      <a href="https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-demo">x402 demo</a>
+      runs the whole flow: an agent pays 5p for an API call.
     </p>
 
     <h2>Community</h2>
