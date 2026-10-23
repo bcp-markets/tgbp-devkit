@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tGBP developers</title>
-  <meta name="description" content="Build with tGBP, the tokenised British pound: a quickstart, the @tgbp/kit developer kit, agents, x402 payments, the API reference and the developer community.">
+  <meta name="description" content="Build with tGBP, the tokenised British pound: a quickstart, the @bcptechnologies/tgbp-kit developer kit, agents, x402 payments, the API reference and the developer community.">
   <link rel="stylesheet" href="/styles.css">
   <meta name="theme-color" content="#faf7ef" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#09172d" media="(prefers-color-scheme: dark)">
@@ -13,7 +13,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="tGBP developers">
   <meta property="og:title" content="tGBP developers">
-  <meta property="og:description" content="Build with tGBP, the tokenised British pound: a quickstart, the @tgbp/kit developer kit, agents, x402 payments, the API reference and the developer community.">
+  <meta property="og:description" content="Build with tGBP, the tokenised British pound: a quickstart, the @bcptechnologies/tgbp-kit developer kit, agents, x402 payments, the API reference and the developer community.">
   <meta property="og:url" content="https://dev.tokenisedgbp.com/">
   <meta property="og:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
   <meta property="og:image:width" content="820">
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="tGBP, the British pound stablecoin">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="tGBP developers">
-  <meta name="twitter:description" content="Build with tGBP, the tokenised British pound: a quickstart, the @tgbp/kit developer kit, agents, x402 payments, the API reference and the developer community.">
+  <meta name="twitter:description" content="Build with tGBP, the tokenised British pound: a quickstart, the @bcptechnologies/tgbp-kit developer kit, agents, x402 payments, the API reference and the developer community.">
   <meta name="twitter:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
   <meta name="twitter:image:alt" content="tGBP, the British pound stablecoin">
 </head>
@@ -48,7 +48,7 @@
 
     <h2>Developer kit</h2>
     <p>
-      <a href="https://github.com/bcp-markets/tgbp-devkit"><code>@tgbp/kit</code></a> is an
+      <a href="https://github.com/bcp-markets/tgbp-devkit"><code>@bcptechnologies/tgbp-kit</code></a> is an
       open-source TypeScript kit under the MIT licence.
     </p>
     <table>
@@ -57,27 +57,27 @@
       </thead>
       <tbody>
         <tr>
-          <td><code>@tgbp/kit</code></td>
+          <td><code>@bcptechnologies/tgbp-kit</code></td>
           <td>The token registry: every tGBP deployment, its address and decimals. Amount parsing and formatting.</td>
         </tr>
         <tr>
-          <td><code>@tgbp/kit/evm</code></td>
+          <td><code>@bcptechnologies/tgbp-kit/evm</code></td>
           <td>Balances, transfers and incoming-transfer watchers on EVM chains, built on viem.</td>
         </tr>
         <tr>
-          <td><code>@tgbp/kit/solana</code></td>
+          <td><code>@bcptechnologies/tgbp-kit/solana</code></td>
           <td>The same helpers on Solana, built on <code>@solana/kit</code>.</td>
         </tr>
         <tr>
-          <td><code>@tgbp/kit/api</code></td>
+          <td><code>@bcptechnologies/tgbp-kit/api</code></td>
           <td>A typed client for the tGBP API's mint, redeem, swap and balance endpoints. It sends idempotency keys and retries only what is safe to repeat. Needs the API key you get at onboarding.</td>
         </tr>
         <tr>
-          <td><code>@tgbp/kit/agent</code>, <code>tgbp-mcp</code></td>
+          <td><code>@bcptechnologies/tgbp-kit/agent</code>, <code>tgbp-mcp</code></td>
           <td>An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP, inside a spend policy you write.</td>
         </tr>
         <tr>
-          <td><code>@tgbp/kit/x402/server</code>, <code>/client</code></td>
+          <td><code>@bcptechnologies/tgbp-kit/x402/server</code>, <code>/client</code></td>
           <td>Charge per HTTP request in tGBP, or pay such a request, with x402 on Base Sepolia.</td>
         </tr>
       </tbody>
@@ -94,7 +94,7 @@
       tGBP account login.
     </p>
     <p>
-      <code>@tgbp/kit/api</code> wraps those endpoints. Staging keys work against the sandbox,
+      <code>@bcptechnologies/tgbp-kit/api</code> wraps those endpoints. Staging keys work against the sandbox,
       which runs on testnets and simulates bank transfers. The
       <a href="https://github.com/bcp-markets/tgbp-devkit#mint-redeem-and-swap-api">README</a>
       shows a mint, a redemption and a swap quote.
@@ -117,8 +117,8 @@
     <h2>x402 payments</h2>
     <p>
       <a href="https://x402.org">x402</a> lets an HTTP API charge per request, so an agent can pay
-      for a call without an account or an API key. <code>@tgbp/kit/x402/server</code> prices an
-      Express route in pence of tGBP, and <code>@tgbp/kit/x402/client</code> pays it. Both run on
+      for a call without an account or an API key. <code>@bcptechnologies/tgbp-kit/x402/server</code> prices an
+      Express route in pence of tGBP, and <code>@bcptechnologies/tgbp-kit/x402/client</code> pays it. Both run on
       Base Sepolia with test tGBP. The payer needs test tGBP but no ETH, because the facilitator
       pays the gas.
     </p>

@@ -1,15 +1,15 @@
 # tgbp-devkit
 
 Developer kit for tGBP, the tokenised British pound. This repo publishes
-[`@tgbp/kit`](https://www.npmjs.com/package/@tgbp/kit): the tGBP token registry, helpers to
+[`@bcptechnologies/tgbp-kit`](https://www.npmjs.com/package/@bcptechnologies/tgbp-kit): the tGBP token registry, helpers to
 read balances, send transfers and watch incoming transfers on EVM chains and Solana, and a typed
 client for the tGBP mint, redeem and swap API.
 
 ```sh
-npm install @tgbp/kit viem                                  # EVM
-npm install @tgbp/kit @solana/kit @solana-program/token    # Solana
-npm install @tgbp/kit                                       # API client only
-npm install @tgbp/kit viem @modelcontextprotocol/sdk zod    # MCP server for agents
+npm install @bcptechnologies/tgbp-kit viem                                  # EVM
+npm install @bcptechnologies/tgbp-kit @solana/kit @solana-program/token    # Solana
+npm install @bcptechnologies/tgbp-kit                                       # API client only
+npm install @bcptechnologies/tgbp-kit viem @modelcontextprotocol/sdk zod    # MCP server for agents
 ```
 
 `viem`, `@solana/kit`, `@solana-program/token`, `@modelcontextprotocol/sdk` and `zod` are optional
@@ -18,7 +18,7 @@ peer dependencies: install only what you use.
 ## Token registry
 
 ```ts
-import { getToken, listTokens } from '@tgbp/kit'
+import { getToken, listTokens } from '@bcptechnologies/tgbp-kit'
 
 getToken('base')
 // { chain: 'base', family: 'evm', network: 'mainnet', status: 'live', symbol: 'tGBP',
@@ -43,8 +43,8 @@ copy. See [Regenerating the registry](#regenerating-the-registry).
 ```ts
 import { createPublicClient, createWalletClient, http } from 'viem'
 import { base } from 'viem/chains'
-import { parseAmount } from '@tgbp/kit'
-import { getBalance, transfer, watchIncomingTransfers } from '@tgbp/kit/evm'
+import { parseAmount } from '@bcptechnologies/tgbp-kit'
+import { getBalance, transfer, watchIncomingTransfers } from '@bcptechnologies/tgbp-kit/evm'
 
 const publicClient = createPublicClient({ chain: base, transport: http() })
 const walletClient = createWalletClient({ chain: base, transport: http(), account })
@@ -74,7 +74,7 @@ balance. That way the common failures throw without spending gas.
 
 ```ts
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit'
-import { getBalance, transfer, watchIncomingTransfers } from '@tgbp/kit/solana'
+import { getBalance, transfer, watchIncomingTransfers } from '@bcptechnologies/tgbp-kit/solana'
 
 const rpc = createSolanaRpc('https://api.mainnet-beta.solana.com')
 const rpcSubscriptions = createSolanaRpcSubscriptions('wss://api.mainnet-beta.solana.com')
@@ -101,12 +101,12 @@ notifications do not carry the sender.
 
 ## Mint, redeem and swap API
 
-`@tgbp/kit/api` calls the tGBP API with the API key you get at onboarding. It needs only `fetch`
+`@bcptechnologies/tgbp-kit/api` calls the tGBP API with the API key you get at onboarding. It needs only `fetch`
 (Node 20 or later, or a browser). Staging keys work against the sandbox, which runs on testnets
 and simulates bank transfers.
 
 ```ts
-import { createTgbpClient } from '@tgbp/kit/api'
+import { createTgbpClient } from '@bcptechnologies/tgbp-kit/api'
 
 const tgbp = createTgbpClient({ apiKey: process.env.TGBP_API_KEY, environment: 'sandbox' })
 
@@ -135,7 +135,7 @@ method's argument and result types come from the API's OpenAPI spec.
 The swap client converts between USDC and tGBP:
 
 ```ts
-import { createTgbpSwapClient } from '@tgbp/kit/api'
+import { createTgbpSwapClient } from '@bcptechnologies/tgbp-kit/api'
 
 const swap = createTgbpSwapClient({ apiKey: process.env.TGBP_API_KEY })
 const { data: quote } = await swap.getQuote({ direction: 'USDC_TO_TGBP', usdcAmount: '100' })
@@ -222,7 +222,7 @@ ones can add up to.
   "mcpServers": {
     "tgbp": {
       "command": "npx",
-      "args": ["-y", "-p", "@tgbp/kit", "-p", "viem@2", "-p", "@modelcontextprotocol/sdk@1", "-p", "zod@4", "tgbp-mcp"],
+      "args": ["-y", "-p", "@bcptechnologies/tgbp-kit", "-p", "viem@2", "-p", "@modelcontextprotocol/sdk@1", "-p", "zod@4", "tgbp-mcp"],
       "env": {
         "TGBP_POLICY_FILE": "/path/to/spend-policy.json",
         "TGBP_API_KEY": "…",
@@ -262,10 +262,10 @@ ship in the npm package too.
 
 ### Using the policy without MCP
 
-`@tgbp/kit/agent` needs `viem`.
+`@bcptechnologies/tgbp-kit/agent` needs `viem`.
 
 ```ts
-import { createAgentActions, createSpendGuard, loadSpendPolicy } from '@tgbp/kit/agent'
+import { createAgentActions, createSpendGuard, loadSpendPolicy } from '@bcptechnologies/tgbp-kit/agent'
 
 const guard = createSpendGuard({
   policy: await loadSpendPolicy('spend-policy.json'),
@@ -279,18 +279,18 @@ await agent.transfer({ chain: 'sepolia', to: '0x…', amount: '25.00' })
 ## x402 payments (Base Sepolia)
 
 [x402](https://x402.org) lets an HTTP API charge per request in a stablecoin, so an agent can pay
-for a call without an account or an API key. `@tgbp/kit/x402/server` prices an Express route in
-pence of tGBP. `@tgbp/kit/x402/client` pays such a route. Both run on Base Sepolia with test
+for a call without an account or an API key. `@bcptechnologies/tgbp-kit/x402/server` prices an Express route in
+pence of tGBP. `@bcptechnologies/tgbp-kit/x402/client` pays such a route. Both run on Base Sepolia with test
 tGBP, through the free public facilitator at `https://x402.org/facilitator`.
 
 ```sh
-npm install @tgbp/kit viem @x402/core @x402/evm @x402/extensions @x402/express express  # server
-npm install @tgbp/kit viem @x402/core @x402/evm                                          # client
+npm install @bcptechnologies/tgbp-kit viem @x402/core @x402/evm @x402/extensions @x402/express express  # server
+npm install @bcptechnologies/tgbp-kit viem @x402/core @x402/evm                                          # client
 ```
 
 ```ts
 import express from 'express'
-import { tgbpPaymentMiddleware } from '@tgbp/kit/x402/server'
+import { tgbpPaymentMiddleware } from '@bcptechnologies/tgbp-kit/x402/server'
 
 const app = express()
 app.use(
@@ -302,7 +302,7 @@ app.get('/quote', (req, res) => res.json({ quote: '…' }))
 ```
 
 ```ts
-import { createTgbpPaymentFetch } from '@tgbp/kit/x402/client'
+import { createTgbpPaymentFetch } from '@bcptechnologies/tgbp-kit/x402/client'
 
 const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: 10 })
 const { response, settlement } = await pay('https://api.example.com/quote')
@@ -366,7 +366,7 @@ A 409 `duplicate_request` on a create means an earlier request with this key is 
 Retry with the same key, never a new one. Any other 409 created nothing.
 
 ```ts
-import { isTgbpKitError } from '@tgbp/kit'
+import { isTgbpKitError } from '@bcptechnologies/tgbp-kit'
 
 try {
   await transfer(params)
