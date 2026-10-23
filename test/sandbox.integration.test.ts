@@ -16,10 +16,15 @@
  * in_transit; the test accepts that until the sandbox simulates the rest. The redemption is
  * created and then cancelled. Completing it needs an on-chain burn signed by
  * the recipient wallet, and this test holds no wallet key.
+ *
+ * CI logs here are public and the sandbox's errors can name a banking
+ * provider, so every failure goes through redactForPublicLog before
+ * vitest prints it.
  */
 import { describe, expect, it } from 'vitest'
 
 import { createTgbpClient, type Mint } from '../src/api/index.js'
+import { redactForPublicLog } from './redact.js'
 
 const REQUIRED_VARS = [
   'TGBP_SANDBOX_API_KEY',
@@ -63,49 +68,58 @@ describe('sandbox mint and redeem', () => {
   it.runIf(configured && missing.length === 0)(
     'mints test tGBP, then creates and cancels a redemption',
     async () => {
-      const tgbp = createTgbpClient({ apiKey: env.apiKey as string, environment: 'sandbox' })
-      const mintBody = {
-        customerId: env.customerId as string,
-        destinationAddress: env.address as string,
-        chain: env.chain,
-        amount: { currency: 'GBP', value: MINT_AMOUNT_GBP },
-      }
-
-      const created = await tgbp.mints.create(mintBody)
-      if (created.status === 'pending_approval') {
-        expect.fail('the sandbox account requires dual approval; use one that does not')
-      }
-      expect(created.status).toBe('created')
-      const mintId = created.data.id
-
-      const replay = await tgbp.mints.create(mintBody, { idempotencyKey: created.idempotencyKey })
-      expect(replay).toMatchObject({ status: 'replayed', data: { id: mintId } })
-
-      await tgbp.mints.simulatePayin(mintId)
-      const mint = await waitForMint(tgbp, mintId)
-      expect(['confirmed', SANDBOX_STOP], mint.failureReason ?? undefined).toContain(mint.status)
-
-      const redemption = await tgbp.redemptions.create({
-        chain: env.chain,
-        amount: { currency: 'GBP', value: MIN_AMOUNT_GBP },
-        bankId: env.bankId as string,
-      })
-      if (redemption.status === 'pending_approval') {
-        expect.fail('the sandbox account requires dual approval; use one that does not')
-      }
-      expect(redemption.status).toBe('created')
       try {
-        expect(redemption.data.burnAddress).toMatch(/\S/)
-      } finally {
-        const cancelled = await tgbp.redemptions.cancel(redemption.data.redemptionId, {
-          reason: 'tgbp-devkit integration test',
-        })
-        expect(cancelled.data.status).toBe('cancelled')
+        await mintAndRedeem()
+      } catch (error) {
+        throw redactForPublicLog(error)
       }
     },
     MINT_TIMEOUT_MS + 60_000,
   )
 })
+
+async function mintAndRedeem() {
+  const tgbp = createTgbpClient({ apiKey: env.apiKey as string, environment: 'sandbox' })
+  const mintBody = {
+    customerId: env.customerId as string,
+    destinationAddress: env.address as string,
+    chain: env.chain,
+    amount: { currency: 'GBP', value: MINT_AMOUNT_GBP },
+  }
+
+  const created = await tgbp.mints.create(mintBody)
+  if (created.status === 'pending_approval') {
+    expect.fail('the sandbox account requires dual approval; use one that does not')
+  }
+  expect(created.status).toBe('created')
+  const mintId = created.data.id
+
+  const replay = await tgbp.mints.create(mintBody, { idempotencyKey: created.idempotencyKey })
+  expect(replay).toMatchObject({ status: 'replayed', data: { id: mintId } })
+
+  await tgbp.mints.simulatePayin(mintId)
+  const mint = await waitForMint(tgbp, mintId)
+  // Not failureReason: it is API text, and it may name a provider.
+  expect(['confirmed', SANDBOX_STOP], `mint ${mintId}`).toContain(mint.status)
+
+  const redemption = await tgbp.redemptions.create({
+    chain: env.chain,
+    amount: { currency: 'GBP', value: MIN_AMOUNT_GBP },
+    bankId: env.bankId as string,
+  })
+  if (redemption.status === 'pending_approval') {
+    expect.fail('the sandbox account requires dual approval; use one that does not')
+  }
+  expect(redemption.status).toBe('created')
+  try {
+    expect(redemption.data.burnAddress).toMatch(/\S/)
+  } finally {
+    const cancelled = await tgbp.redemptions.cancel(redemption.data.redemptionId, {
+      reason: 'tgbp-devkit integration test',
+    })
+    expect(cancelled.data.status).toBe('cancelled')
+  }
+}
 
 async function waitForMint(tgbp: ReturnType<typeof createTgbpClient>, mintId: string) {
   const deadline = Date.now() + MINT_TIMEOUT_MS
