@@ -93,6 +93,20 @@ describe('redactForPublicLog', () => {
     expect(redacted.message).toBe(`API_ERROR on POST /api/v1/mints with 422: ${REDACTED}`)
   })
 
+  it('masks an unreachable API, which has a call but no status', async () => {
+    const tgbp = createTgbpClient({
+      apiKey: 'tgbp_sandbox_test',
+      environment: 'sandbox',
+      fetch: (async () => {
+        throw new TypeError(API_MESSAGE)
+      }) as typeof globalThis.fetch,
+      retry: { maxRetries: 0, baseDelayMs: 0 },
+    })
+    const redacted = redactForPublicLog(await thrownBy(tgbp.mints.create(MINT_BODY)))
+    expect(redacted.message).toBe(`API_UNREACHABLE on POST /api/v1/mints: ${REDACTED}`)
+    expect(leaks(printed(redacted))).toBe(false)
+  })
+
   it('drops the message of an assertion, which quotes its values, but keeps its stack frames', () => {
     const failure = assertionFrom(() => expect(API_CODE).toBe('created'))
     // The control: vitest's own message quotes the actual value.
