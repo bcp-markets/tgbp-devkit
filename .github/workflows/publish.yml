@@ -2,7 +2,8 @@ name: Publish
 
 # Publishing a GitHub release tagged v<version> publishes @tgbp/kit to npm
 # with a provenance attestation. npm trusted publishing (OIDC) authenticates
-# the run; an NPM_TOKEN secret, when set, is the fallback until that is configured.
+# the run; there is no npm token. The trusted publisher on npmjs.com names this
+# repo, this file (publish.yml) and the npm environment.
 on:
   release:
     types: [published]
@@ -53,8 +54,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,10 +67,6 @@ jobs:
       # No dependency install scripts in the job that can publish.
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm build
-      # Trusted publishing needs no token; this writes one only when the secret exists.
-      - name: Configure the NPM_TOKEN fallback
-        if: env.NPM_TOKEN != ''
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
       - name: Publish
         run: |
           version="$(node -p "require('./package.json').version")"
