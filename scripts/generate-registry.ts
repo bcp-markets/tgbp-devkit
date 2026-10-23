@@ -64,6 +64,20 @@ const SOLANA_CHAINS: Record<
   },
 }
 
+/**
+ * Testnet chains whose `knownAnomaly` was checked on-chain and found to be
+ * tGBP's own token, keyed by chain, with the address that was checked. The
+ * flag stays in the chain registry for cross-chain onboarding; it does not stop
+ * the token being listed. A mainnet chain is never cleared this way.
+ *
+ * base-sepolia, checked 2026-10-23: the proxy bytecode equals Base mainnet's,
+ * the implementation differs only in the LayerZero endpoint address, and the
+ * owner is a tGBP wallet.
+ */
+const CLEARED_TESTNET_ANOMALIES: Record<string, `0x${string}`> = {
+  'base-sepolia': '0x27f6c8289550fCE67f6B50BeD1F519966aFE5287',
+}
+
 /** Deployment directories that are not public chains. */
 const IGNORED_DEPLOYMENT_DIRS = new Set(['hardhat'])
 
@@ -90,13 +104,22 @@ export function buildRegistry(sourceDir: string): TokenDeployment[] {
     }
     const retiredField = optional(entry, 'retired', 'object', key)
     const retired = retiredField === undefined ? undefined : record(retiredField, `${key}.retired`)
-    // A known anomaly on a live chain is a contract tGBP did not deploy
-    // (base-sepolia's orphan proxy); never publish it as the token, even when
-    // an artifact is committed. Retired chains stay listed, marked, so holders
-    // can still find theirs.
+    const isMainnet = required(entry, 'isMainnet', 'boolean', key)
+    // A known anomaly on a live chain may be a contract tGBP did not deploy;
+    // never publish it as the token, even when an artifact is committed,
+    // unless it is a testnet in CLEARED_TESTNET_ANOMALIES. Retired chains stay
+    // listed, marked, so holders can still find theirs.
     if (entry.knownAnomaly !== undefined && !retired) {
-      console.warn(`${key}: skipped, knownAnomaly on a live chain`)
-      continue
+      const cleared = isMainnet ? undefined : CLEARED_TESTNET_ANOMALIES[key]
+      if (!cleared) {
+        console.warn(`${key}: skipped, knownAnomaly on a live chain`)
+        continue
+      }
+      if (cleared.toLowerCase() !== oftAddress.toLowerCase()) {
+        throw new Error(
+          `${key}: oftAddress ${oftAddress} is not the address checked in CLEARED_TESTNET_ANOMALIES (${cleared})`,
+        )
+      }
     }
     const hardhatNetwork = required(entry, 'hardhatNetwork', 'string', key)
     const oftDeploymentName = required(entry, 'oftDeploymentName', 'string', key)
@@ -113,7 +136,7 @@ export function buildRegistry(sourceDir: string): TokenDeployment[] {
     evm.push({
       chain: key,
       family: 'evm',
-      network: required(entry, 'isMainnet', 'boolean', key) ? 'mainnet' : 'testnet',
+      network: isMainnet ? 'mainnet' : 'testnet',
       status: retired ? 'retired' : 'live',
       ...(retired ? { retiredOn: required(retired, 'date', 'string', `${key}.retired`) } : {}),
       symbol: 'tGBP',
