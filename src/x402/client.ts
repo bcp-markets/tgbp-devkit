@@ -196,6 +196,14 @@ export function createTgbpPaymentFetch({
       } catch (error) {
         cause = error
       }
+      // A settlement the facilitator rejected comes back as a 402 carrying a failed PAYMENT-RESPONSE.
+      if (reason === undefined) {
+        try {
+          reason = http.getPaymentSettleResponse((name) => response.headers.get(name)).errorReason
+        } catch {
+          // No settlement header either; `cause` keeps the first parse error.
+        }
+      }
       throw new TgbpKitError(
         'PAYMENT_REFUSED',
         `${url} refused the tGBP payment: ${clip(reason) ?? 'no reason given'}`,
