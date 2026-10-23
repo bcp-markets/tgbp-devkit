@@ -82,6 +82,7 @@ describe('buildRegistry', () => {
       ['base', 'mainnet', 'live'],
       ['gnosis', 'mainnet', 'retired'],
       ['sepolia', 'testnet', 'live'],
+      ['base-sepolia', 'testnet', 'live'],
       ['solana', 'mainnet', 'live'],
       ['solana-devnet', 'testnet', 'live'],
     ])
@@ -97,21 +98,77 @@ describe('buildRegistry', () => {
       explorerUrl: 'https://basescan.org',
     })
     expect(tokens[1]).toMatchObject({ retiredOn: '2026-09-28' })
-    expect(tokens[4]).toMatchObject({ cluster: 'devnet', address: DEVNET_MINT, decimals: 9 })
+    expect(tokens[5]).toMatchObject({ cluster: 'devnet', address: DEVNET_MINT, decimals: 9 })
   })
 
-  it('skips forks, undeployed chains and a live anomaly with no artifact', () => {
+  it('skips forks and undeployed chains', () => {
     const chains = buildRegistry(sourceTree()).map((t) => t.chain)
     expect(chains).not.toContain('base-fork')
     expect(chains).not.toContain('arc')
-    expect(chains).not.toContain('base-sepolia')
   })
 
-  it('skips a live anomaly even when its artifact is committed', () => {
+  it('lists a cleared testnet anomaly at the address that was checked', () => {
+    const token = buildRegistry(sourceTree()).find((t) => t.chain === 'base-sepolia')
+    expect(token).toMatchObject({
+      network: 'testnet',
+      status: 'live',
+      chainId: 84532,
+      address: '0x27f6c8289550fCE67f6B50BeD1F519966aFE5287',
+    })
+  })
+
+  it('skips a live anomaly on a mainnet chain, even one cleared as a testnet', () => {
     const dir = sourceTree((write) =>
-      write('deployments/base-sepolia/StableTokenV1OFT.json', { address: CANONICAL }),
+      write(
+        'registry/chains.ts',
+        REGISTRY.replace(
+          "hardhatNetwork: 'base-sepolia', chainId: 84532, eid: 40245, isMainnet: false,",
+          "hardhatNetwork: 'base-sepolia', chainId: 84532, eid: 40245, isMainnet: true,",
+        ),
+      ),
     )
     expect(buildRegistry(dir).map((t) => t.chain)).not.toContain('base-sepolia')
+  })
+
+  it('skips a live mainnet anomaly even when its artifact is committed', () => {
+    const dir = sourceTree((write) =>
+      write(
+        'registry/chains.ts',
+        REGISTRY.replace(
+          "oftAddress: MAINNET_OFT_ADDRESS,\n  blockExplorer: { name: 'BaseScan'",
+          "oftAddress: MAINNET_OFT_ADDRESS, knownAnomaly: { reason: 'x' },\n  blockExplorer: { name: 'BaseScan'",
+        ),
+      ),
+    )
+    expect(buildRegistry(dir).map((t) => t.chain)).not.toContain('base')
+  })
+
+  it('skips a live testnet anomaly nobody has cleared', () => {
+    const dir = sourceTree((write) =>
+      write(
+        'registry/chains.ts',
+        REGISTRY.replace(
+          "browserUrl: 'https://sepolia.etherscan.io' },",
+          "browserUrl: 'https://sepolia.etherscan.io' }, knownAnomaly: { reason: 'x' },",
+        ),
+      ),
+    )
+    expect(buildRegistry(dir).map((t) => t.chain)).not.toContain('sepolia')
+  })
+
+  it('fails when a cleared testnet anomaly moves to another address', () => {
+    const dir = sourceTree((write) =>
+      write(
+        'registry/chains.ts',
+        REGISTRY.replace(
+          "eid: 40245, isMainnet: false,\n  oftDeploymentName: 'StableTokenV1OFT', oftAddress: MAINNET_OFT_ADDRESS,",
+          "eid: 40245, isMainnet: false,\n  oftDeploymentName: 'StableTokenV1OFT', oftAddress: '0x0000000000000000000000000000000000000002',",
+        ),
+      ),
+    )
+    expect(() => buildRegistry(dir)).toThrow(
+      /base-sepolia: oftAddress .* is not the address checked/,
+    )
   })
 
   it('fails when a field it reads is an imported value', () => {

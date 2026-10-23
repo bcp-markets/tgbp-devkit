@@ -12,7 +12,7 @@ try {
   const { hash, receipt } = await transfer({
     publicClient,
     walletClient,
-    chain: token,
+    chain: 'base-sepolia',
     to,
     amount: parseAmount(value, token.decimals),
   })
