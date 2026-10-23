@@ -267,9 +267,11 @@ export function apiError(
       : (response.headers.get('x-request-id') ?? undefined)
   const message =
     reason ?? (typeof error?.message === 'string' ? error.message : response.statusText)
-  // A 409 on a keyed create means an earlier request with that key is still
-  // creating the record; resending under a new key would create a second one.
-  const keyed409 = response.status === 409 && retryKey(context) !== undefined
+  // A 409 duplicate_request on a keyed create means an earlier request with that
+  // key is still creating the record; resending under a new key would create a
+  // second one. Other 409s, such as duplicate_active_mint, created nothing.
+  const keyed409 =
+    response.status === 409 && apiCode === 'duplicate_request' && retryKey(context) !== undefined
   const hint = response.ok || response.status >= 500 || keyed409 ? retryHint(context) : ''
   return new TgbpKitError(
     'API_ERROR',

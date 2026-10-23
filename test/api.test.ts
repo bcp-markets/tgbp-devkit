@@ -213,9 +213,11 @@ describe('retries', () => {
       expect(error).toMatchObject({
         details: { status, apiCode: 'nope', requestId: 'req_1', idempotencyKey: 'k' },
       })
-      // Only a 409 can mean the first request with this key is still in progress.
+      // Only a 409 duplicate_request means the first request with this key is
+      // still in progress; these all carry another code.
       const hinted = /retry only with the same idempotency key \(k\)/.test(String(error))
-      expect(hinted, String(status)).toBe(status === 409)
+      expect(hinted, String(status)).toBe(false)
+      expect(error).toMatchObject({ details: { mayHaveTakenEffect: false } })
       expect(calls, String(status)).toHaveLength(1)
     }
   })
@@ -231,6 +233,20 @@ describe('retries', () => {
     expect(isTgbpKitError(error, 'API_ERROR')).toBe(true)
     expect((error as Error).message).toMatch(/same idempotency key \(mint_0409\)/)
     expect(error).toMatchObject({ details: { status: 409, mayHaveTakenEffect: true } })
+  })
+
+  it('does not tell the caller to keep the key after a 409 that created nothing', async () => {
+    const { fetch } = fakeFetch({
+      status: 409,
+      body: { error: { code: 'duplicate_active_mint', message: 'Already active.' } },
+    })
+    const error = await client(fetch)
+      .mints.create(MINT_BODY, { idempotencyKey: 'mint_0410' })
+      .catch((e: unknown) => e)
+    expect((error as Error).message).not.toMatch(/same idempotency key/)
+    expect(error).toMatchObject({
+      details: { apiCode: 'duplicate_active_mint', mayHaveTakenEffect: false },
+    })
   })
 
   it('gives up after maxRetries and names the key to retry with', async () => {
