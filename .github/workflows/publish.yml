@@ -37,6 +37,19 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: scripts/stamp-version.sh "$TAG"
+      # A mistyped or older tag would otherwise move npm's latest backwards.
+      # Prereleases go to the next dist-tag, so they skip this check.
+      - name: Check the version is newer than npm's latest
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in *-*) exit 0 ;; esac
+          latest="$(npm view "$(node -p "require('./package.json').name")" dist-tags.latest 2>/dev/null || true)"
+          [ -n "$latest" ] || exit 0
+          newest="$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -n1)"
+          if [ "$newest" != "$version" ] || [ "$latest" = "$version" ]; then
+            echo "::error::$version is not newer than npm's latest ($latest)"
+            exit 1
+          fi
       # anvil runs the EVM tests against a local chain.
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
