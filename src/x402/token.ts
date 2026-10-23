@@ -1,23 +1,7 @@
-import type { EvmTokenDeployment } from '../registry/index.js'
+import { type EvmTokenDeployment, getEvmToken } from '../registry/index.js'
 
-/**
- * tGBP on Base Sepolia, the chain the x402 helpers target. The generated
- * registry skips this proxy, because the tGBP contracts repo flags it as an
- * anomaly for cross-chain onboarding. Its implementation bytecode was compared
- * with Base mainnet's: it differs only in the LayerZero endpoint address,
- * which transfers, permits and ban checks do not read.
- */
-export const TGBP_BASE_SEPOLIA: EvmTokenDeployment = {
-  chain: 'base-sepolia',
-  family: 'evm',
-  network: 'testnet',
-  status: 'live',
-  symbol: 'tGBP',
-  decimals: 18,
-  chainId: 84532,
-  address: '0x27f6c8289550fCE67f6B50BeD1F519966aFE5287',
-  explorerUrl: 'https://sepolia.basescan.org',
-}
+/** tGBP on Base Sepolia, the chain the x402 helpers target. */
+export const TGBP_BASE_SEPOLIA: EvmTokenDeployment = getEvmToken('base-sepolia')
 
 /**
  * tGBP's EIP-712 domain for EIP-2612 permits, as the token's `eip712Domain()`
