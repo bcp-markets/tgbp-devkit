@@ -1,5 +1,5 @@
-import { isTgbpKitError, parseAmount } from '@tgbp/kit'
-import { transfer } from '@tgbp/kit/evm'
+import { isTgbpKitError, parseAmount } from '@bcptechnologies/tgbp-kit'
+import { transfer } from '@bcptechnologies/tgbp-kit/evm'
 import { publicClient, token, walletClient } from './tgbp.mjs'
 
 const [to, value = '1'] = process.argv.slice(2)
