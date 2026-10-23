@@ -59,17 +59,32 @@ header {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1.25rem;
-  align-items: baseline;
+  align-items: center;
   padding-top: 1.5rem;
   padding-bottom: 1rem;
   border-bottom: 1px solid var(--rule);
 }
 
 header .home {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font-weight: 700;
   color: var(--brand);
   text-decoration: none;
   margin-right: auto;
+}
+
+header .home img {
+  height: 2.5rem;
+  width: auto;
+}
+
+/* The wordmark is drawn in black, which disappears on the dark background. */
+@media (prefers-color-scheme: dark) {
+  header .home img {
+    filter: invert(1);
+  }
 }
 
 nav a {
