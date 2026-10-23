@@ -36,6 +36,8 @@ const env = {
 const configured = Boolean(env.apiKey)
 const required = process.env.TGBP_REQUIRE_SANDBOX === '1'
 
+// The API's minimum for both mints and redemptions.
+const MIN_AMOUNT_GBP = 5
 const MINT_TIMEOUT_MS = 10 * 60_000
 const FINAL_MINT_STATUSES = new Set<Mint['status']>(['confirmed', 'failed', 'cancelled'])
 
@@ -52,7 +54,7 @@ describe('sandbox mint and redeem', () => {
         customerId: env.customerId as string,
         destinationAddress: env.address as string,
         chain: env.chain,
-        amount: { currency: 'GBP', value: 1 },
+        amount: { currency: 'GBP', value: MIN_AMOUNT_GBP },
       }
 
       const created = await tgbp.mints.create(mintBody)
@@ -71,7 +73,7 @@ describe('sandbox mint and redeem', () => {
 
       const redemption = await tgbp.redemptions.create({
         chain: env.chain,
-        amount: { currency: 'GBP', value: 1 },
+        amount: { currency: 'GBP', value: MIN_AMOUNT_GBP },
         bankId: env.bankId as string,
       })
       if (redemption.status === 'pending_approval') {
