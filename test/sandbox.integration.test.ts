@@ -40,6 +40,11 @@ const required = process.env.TGBP_REQUIRE_SANDBOX === '1'
 
 // The API's minimum for both mints and redemptions.
 const MIN_AMOUNT_GBP = 5
+// The API refuses a second active mint to the same address for the same
+// amount, and a sandbox mint can stay active at in_transit. So each run mints
+// a random amount from 5.00 to 104.99.
+// Whole pence, divided once, so the value serialises with at most two decimals.
+const MINT_AMOUNT_GBP = (MIN_AMOUNT_GBP * 100 + Math.floor(Math.random() * 10_000)) / 100
 const MINT_TIMEOUT_MS = 10 * 60_000
 // in_transit is the furthest the sandbox gets on its own after a simulated pay-in.
 const SANDBOX_STOP: Mint['status'] = 'in_transit'
@@ -63,7 +68,7 @@ describe('sandbox mint and redeem', () => {
         customerId: env.customerId as string,
         destinationAddress: env.address as string,
         chain: env.chain,
-        amount: { currency: 'GBP', value: MIN_AMOUNT_GBP },
+        amount: { currency: 'GBP', value: MINT_AMOUNT_GBP },
       }
 
       const created = await tgbp.mints.create(mintBody)

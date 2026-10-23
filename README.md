@@ -294,8 +294,8 @@ Failures the kit can explain throw a `TgbpKitError` with a `code`:
 After a 5xx or `API_UNREACHABLE`, a create may have taken effect. Retry it only with
 `error.details.idempotencyKey`, or read the record before you send anything new.
 
-A 409 on a create means an earlier request with this key is still in progress. Retry with the
-same key, never a new one.
+A 409 `duplicate_request` on a create means an earlier request with this key is still in progress.
+Retry with the same key, never a new one. Any other 409 created nothing.
 
 ```ts
 import { isTgbpKitError } from '@tgbp/kit'
