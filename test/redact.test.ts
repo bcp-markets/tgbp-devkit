@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { createTgbpClient } from '../src/api/index.js'
 import { REDACTED, redactForPublicLog } from './redact.js'
 
-// The shape of a real staging error that reached a public log. The provider
-// name and its code prefix are built from pieces so this file does not disclose them.
+// The shape of a real staging error that reached a public log (TGBP-6891). The
+// provider name and its code prefix are built from pieces so this file does not
+// disclose them.
 const PROVIDER = ['Clear', 'Junction'].join('')
 const PREFIX = ['c', 'j'].join('')
 const API_CODE = `${PREFIX}_viban_requested`
@@ -29,6 +30,19 @@ function printed(error: Error): string {
   return inspect(error, { depth: Infinity, showHidden: true })
 }
 
+/**
+ * Whether `output` holds API text. A boolean, not toContain: a failing
+ * toContain would quote the output, and the name with it, into the public log.
+ */
+function leaks(output: string): boolean {
+  return (
+    output.includes(PROVIDER) ||
+    output.includes(API_CODE) ||
+    new RegExp(`\\b${PREFIX}_`).test(output) ||
+    output.includes('virtual IBAN')
+  )
+}
+
 async function thrownBy(promise: Promise<unknown>): Promise<unknown> {
   try {
     await promise
@@ -38,46 +52,62 @@ async function thrownBy(promise: Promise<unknown>): Promise<unknown> {
   throw new Error('expected the call to throw')
 }
 
+function assertionFrom(check: () => void): unknown {
+  try {
+    check()
+  } catch (error) {
+    return error
+  }
+  throw new Error('expected the assertion to fail')
+}
+
+const MINT_BODY = {
+  customerId: 'customer_1',
+  destinationAddress: '0x1111111111111111111111111111111111111111',
+  chain: 'sepolia',
+  amount: { currency: 'GBP' as const, value: 10 },
+}
+
 describe('redactForPublicLog', () => {
   it('masks a provider-named API error and keeps the call, status and request id', async () => {
     const tgbp = failingClient({
       error: { code: API_CODE, message: API_MESSAGE, details: { request_id: 'req_1' } },
     })
-    const error = await thrownBy(
-      tgbp.mints.create({
-        customerId: 'customer_1',
-        destinationAddress: '0x1111111111111111111111111111111111111111',
-        chain: 'sepolia',
-        amount: { currency: 'GBP', value: 10 },
-      }),
-    )
+    const error = await thrownBy(tgbp.mints.create(MINT_BODY))
     // The kit itself still passes the API's error through for developers.
-    expect(printed(error as Error)).toContain(PROVIDER)
+    expect(leaks(printed(error as Error))).toBe(true)
 
     const redacted = redactForPublicLog(error)
     expect(redacted.message).toBe(
       `API_ERROR on POST /api/v1/mints with 422: ${REDACTED} (request id req_1)`,
     )
     expect(redacted.name).toBe('TgbpKitError')
-    const output = printed(redacted)
-    expect(output).not.toContain(PROVIDER)
-    expect(output).not.toContain(API_CODE)
-    expect(output).not.toMatch(new RegExp(`\\b${PREFIX}_`))
-    expect(output).not.toContain('virtual IBAN')
-    expect(redacted.cause).toBeUndefined()
+    expect(leaks(printed(redacted))).toBe(false)
   })
 
-  it('keeps the message and stack frames of an assertion, but not its values', () => {
-    let failure: unknown
-    try {
-      expect({ reason: API_MESSAGE }).toEqual({ reason: 'none' })
-    } catch (error) {
-      failure = error
-    }
+  it('drops a request id that is not id-shaped', async () => {
+    const tgbp = failingClient({
+      error: { code: API_CODE, message: API_MESSAGE, details: { request_id: API_MESSAGE } },
+    })
+    const redacted = redactForPublicLog(await thrownBy(tgbp.mints.create(MINT_BODY)))
+    expect(redacted.message).toBe(`API_ERROR on POST /api/v1/mints with 422: ${REDACTED}`)
+  })
+
+  it('drops the message of an assertion, which quotes its values, but keeps its stack frames', () => {
+    const failure = assertionFrom(() => expect(API_CODE).toBe('created'))
+    // The control: vitest's own message quotes the actual value.
+    expect(leaks(printed(failure as Error))).toBe(true)
+
     const redacted = redactForPublicLog(failure)
     expect(redacted.name).toBe('AssertionError')
+    expect(redacted.message).toBe(REDACTED)
     expect(redacted.stack).toMatch(/redact\.test\.ts/)
-    expect(printed(redacted)).not.toContain(PROVIDER)
+    expect(leaks(printed(redacted))).toBe(false)
+  })
+
+  it("keeps the message of expect.fail, which is this repo's own text", () => {
+    const failure = assertionFrom(() => expect.fail('the sandbox account requires dual approval'))
+    expect(redactForPublicLog(failure).message).toBe('the sandbox account requires dual approval')
   })
 
   it('redacts a thrown non-Error value entirely', () => {

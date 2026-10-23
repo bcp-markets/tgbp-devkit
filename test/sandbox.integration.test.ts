@@ -18,8 +18,8 @@
  * the recipient wallet, and this test holds no wallet key.
  *
  * CI logs here are public and the sandbox's errors can name a banking
- * provider, so every failure goes through redactForPublicLog before vitest
- * prints it.
+ * provider (TGBP-6891), so every failure goes through redactForPublicLog before
+ * vitest prints it.
  */
 import { describe, expect, it } from 'vitest'
 
@@ -67,7 +67,13 @@ describe('sandbox mint and redeem', () => {
 
   it.runIf(configured && missing.length === 0)(
     'mints test tGBP, then creates and cancels a redemption',
-    () => mintAndRedeem().catch((error) => Promise.reject(redactForPublicLog(error))),
+    async () => {
+      try {
+        await mintAndRedeem()
+      } catch (error) {
+        throw redactForPublicLog(error)
+      }
+    },
     MINT_TIMEOUT_MS + 60_000,
   )
 })
