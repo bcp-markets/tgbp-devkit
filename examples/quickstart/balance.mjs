@@ -1,5 +1,5 @@
-import { formatAmount } from '@tgbp/kit'
-import { getBalance } from '@tgbp/kit/evm'
+import { formatAmount } from '@bcptechnologies/tgbp-kit'
+import { getBalance } from '@bcptechnologies/tgbp-kit/evm'
 import { formatEther } from 'viem'
 import { account, publicClient, token } from './tgbp.mjs'
 

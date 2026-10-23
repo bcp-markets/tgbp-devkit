@@ -1,7 +1,7 @@
 /**
  * An agent pays 5p of test tGBP for an API call over x402 on Base Sepolia,
  * from a wallet that holds no ETH. This is also the end-to-end test of
- * `@tgbp/kit/x402`: it exits 1 if any check fails.
+ * `@bcptechnologies/tgbp-kit/x402`: it exits 1 if any check fails.
  *
  *   pnpm x402:demo --fund-from <foundry keystore account>
  *   pnpm x402:demo --pay-to <address>        # fund the printed payer yourself

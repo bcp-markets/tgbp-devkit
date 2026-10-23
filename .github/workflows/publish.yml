@@ -1,6 +1,6 @@
 name: Publish
 
-# Publishing a GitHub release tagged v<version> publishes @tgbp/kit to npm
+# Publishing a GitHub release tagged v<version> publishes @bcptechnologies/tgbp-kit to npm
 # with a provenance attestation. npm trusted publishing (OIDC) authenticates
 # the run; there is no npm token. The trusted publisher on npmjs.com names this
 # repo, this file (publish.yml) and the npm environment.

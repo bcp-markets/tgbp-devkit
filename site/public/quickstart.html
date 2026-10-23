@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Quickstart · tGBP developers</title>
-  <meta name="description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @tgbp/kit and viem.">
+  <meta name="description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @bcptechnologies/tgbp-kit and viem.">
   <link rel="stylesheet" href="/styles.css">
   <meta name="theme-color" content="#faf7ef" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#09172d" media="(prefers-color-scheme: dark)">
@@ -13,7 +13,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="tGBP developers">
   <meta property="og:title" content="Quickstart · tGBP developers">
-  <meta property="og:description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @tgbp/kit and viem.">
+  <meta property="og:description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @bcptechnologies/tgbp-kit and viem.">
   <meta property="og:url" content="https://dev.tokenisedgbp.com/quickstart">
   <meta property="og:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
   <meta property="og:image:width" content="820">
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="tGBP, the British pound stablecoin">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Quickstart · tGBP developers">
-  <meta name="twitter:description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @tgbp/kit and viem.">
+  <meta name="twitter:description" content="Go from a clean machine to a confirmed test tGBP transfer on Base Sepolia with @bcptechnologies/tgbp-kit and viem.">
   <meta name="twitter:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
   <meta name="twitter:image:alt" content="tGBP, the British pound stablecoin">
 </head>
@@ -51,7 +51,7 @@
 mkdir tgbp-quickstart &amp;&amp; cd tgbp-quickstart
 npm init -y
 npm pkg set type=module
-npm install @tgbp/kit viem
+npm install @bcptechnologies/tgbp-kit viem
 echo .env &gt;&gt; .gitignore</code></pre>
 
     <h2>2. Connect to Base Sepolia</h2>
@@ -126,8 +126,8 @@ console.log(`Test wallet created. Address: ${privateKeyToAccount(key).address}`)
 
     <h2>5. Check the balance</h2>
     <p>Save this as <code>balance.mjs</code>, then run <code>node --env-file=.env balance.mjs</code>.</p>
-    <pre><code>import { formatAmount } from '@tgbp/kit'
-import { getBalance } from '@tgbp/kit/evm'
+    <pre><code>import { formatAmount } from '@bcptechnologies/tgbp-kit'
+import { getBalance } from '@bcptechnologies/tgbp-kit/evm'
 import { formatEther } from 'viem'
 import { account, publicClient, token } from './tgbp.mjs'
 
@@ -143,8 +143,8 @@ console.log(`and ${formatEther(gas)} Base Sepolia ETH for gas`)
       Save this as <code>send.mjs</code>. Run it with a recipient address and an amount:
       <code>node --env-file=.env send.mjs 0xRecipient 1</code>.
     </p>
-    <pre><code>import { isTgbpKitError, parseAmount } from '@tgbp/kit'
-import { transfer } from '@tgbp/kit/evm'
+    <pre><code>import { isTgbpKitError, parseAmount } from '@bcptechnologies/tgbp-kit'
+import { transfer } from '@bcptechnologies/tgbp-kit/evm'
 import { publicClient, token, walletClient } from './tgbp.mjs'
 
 const [to, value = '1'] = process.argv.slice(2)
