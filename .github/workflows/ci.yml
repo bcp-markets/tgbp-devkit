@@ -46,6 +46,9 @@ jobs:
       # ./-prefixed bin path, so the release would ship without tgbp-mcp.
       - name: Check npm has nothing to fix in package.json
         run: npm pkg fix && git diff --exit-code package.json
+      # Only the publish workflow stamps a real version, from the release tag.
+      - name: Check package.json carries the 0.0.0-tagged placeholder
+        run: test "$(node -p "require('./package.json').version")" = 0.0.0-tagged
 
   registry-drift:
     name: Token registry matches tGBP
