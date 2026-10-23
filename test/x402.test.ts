@@ -36,6 +36,7 @@ const SETTLE_HASH = `0x${'ab'.repeat(32)}` as const
 function fakeFacilitator(network: string) {
   const calls: { verify: PaymentPayload[]; settle: PaymentPayload[] } = { verify: [], settle: [] }
   let refuse: string | undefined
+  let failSettle: string | undefined
   const facilitator: FacilitatorClient = {
     getSupported: async () => ({
       kinds: [{ x402Version: 2, scheme: 'exact', network: network as `${string}:${string}` }],
@@ -50,10 +51,22 @@ function fakeFacilitator(network: string) {
     },
     settle: async (payload: PaymentPayload, requirements: PaymentRequirements) => {
       calls.settle.push(payload)
-      return { success: true, transaction: SETTLE_HASH, network: requirements.network }
+      return failSettle === undefined
+        ? { success: true, transaction: SETTLE_HASH, network: requirements.network }
+        : {
+            success: false,
+            errorReason: failSettle,
+            transaction: '',
+            network: requirements.network,
+          }
     },
   }
-  return { facilitator, calls, refuseWith: (reason: string) => (refuse = reason) }
+  return {
+    facilitator,
+    calls,
+    refuseWith: (reason: string) => (refuse = reason),
+    failSettleWith: (reason: string) => (failSettle = reason),
+  }
 }
 
 async function serve(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
@@ -373,6 +386,15 @@ describe('createTgbpPaymentFetch', () => {
       details: { payer, payTo: PAY_TO, amount: FIVE_PENCE, deadline: expect.any(Number) },
     })
     expect(fake.calls.settle).toHaveLength(0)
+  })
+
+  it('throws PAYMENT_REFUSED with the reason when settlement fails', async () => {
+    fake.failSettleWith('invalid_exact_evm_transaction_failed')
+    await expect(pay()(`${server.url}/quote`)).rejects.toMatchObject({
+      code: 'PAYMENT_REFUSED',
+      details: { reason: 'invalid_exact_evm_transaction_failed' },
+    })
+    expect(fake.calls.settle).toHaveLength(1)
   })
 
   it('throws PAYMENT_NOT_OFFERED when the server asks for another asset', async () => {

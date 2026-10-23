@@ -29,3 +29,21 @@ endpoint instead of `https://sepolia.base.org`.
 ## A recorded run
 
 <!-- x402-demo-run -->
+
+On 23 October 2026 a fresh payer holding 0 ETH paid 5p of test tGBP for `/quote` and got the
+quote back. The facilitator settled it in Base Sepolia block 49298807:
+[`0x8da65b80…a28df1f`](https://sepolia.basescan.org/tx/0x8da65b804414eda232f8368a2e55b45d51b46397753c7cd56c069c01ea28df1f).
+
+```text
+PASS  payer holds 0 ETH
+API response 200: {"quote":"GBP is the currency of the United Kingdom","paidWith":"5p of test tGBP"}
+PASS  the paid request got the API response
+PASS  the settlement transaction succeeded on Base Sepolia
+PASS  the settlement moved exactly 5p of tGBP from the payer to 0xd63Cda198C9bc1D9B02Ab052D11bC66907236BBd
+PASS  the payer paid 5p, once
+PASS  the payer still holds 0 ETH: the facilitator paid the gas
+```
+
+The run before it failed: the facilitator's own transaction submission returned an RPC error.
+The client threw `PAYMENT_REFUSED` with the facilitator's reason, nothing moved, and the next run
+settled.
