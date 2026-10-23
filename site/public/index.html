@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tGBP developers</title>
+  <meta name="description" content="Build with tGBP, the tokenised British pound: a quickstart, the @tgbp/kit developer kit, agents, x402 payments, the API reference and the developer community.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <a class="home" href="/">tGBP developers</a>
+    <nav>
+      <a href="/quickstart">Quickstart</a>
+      <a href="/brand">Describe tGBP</a>
+      <a href="https://github.com/bcp-markets/tgbp-devkit">GitHub</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Build with tGBP</h1>
+    <p>
+      tGBP is Tokenised GBP, a British pound stablecoin. Each token is backed one to one by cash and
+      cash equivalents. It runs on Ethereum, Base, Solana and other chains, with 18 decimals on EVM
+      chains and 9 on Solana.
+    </p>
+    <p>
+      Start with the <a href="/quickstart">quickstart</a>. It takes a clean machine to a confirmed
+      test tGBP transfer on Base Sepolia in about 15 minutes.
+    </p>
+
+    <h2>Developer kit</h2>
+    <p>
+      <a href="https://github.com/bcp-markets/tgbp-devkit"><code>@tgbp/kit</code></a> is an
+      open-source TypeScript kit under the MIT licence.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Module</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>@tgbp/kit</code></td>
+          <td>The token registry: every tGBP deployment, its address and decimals. Amount parsing and formatting.</td>
+        </tr>
+        <tr>
+          <td><code>@tgbp/kit/evm</code></td>
+          <td>Balances, transfers and incoming-transfer watchers on EVM chains, built on viem.</td>
+        </tr>
+        <tr>
+          <td><code>@tgbp/kit/solana</code></td>
+          <td>The same helpers on Solana, built on <code>@solana/kit</code>.</td>
+        </tr>
+        <tr>
+          <td><code>@tgbp/kit/api</code></td>
+          <td>A typed client for the tGBP API's mint, redeem, swap and balance endpoints. It sends idempotency keys and retries only what is safe to repeat. Needs the API key you get at onboarding.</td>
+        </tr>
+        <tr>
+          <td><code>@tgbp/kit/agent</code>, <code>tgbp-mcp</code></td>
+          <td>An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP, inside a spend policy you write.</td>
+        </tr>
+        <tr>
+          <td><code>@tgbp/kit/x402/server</code>, <code>/client</code></td>
+          <td>Charge per HTTP request in tGBP, or pay such a request, with x402 on Base Sepolia.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>
+      The <a href="https://github.com/bcp-markets/tgbp-devkit#readme">README</a> documents every
+      helper and error code.
+    </p>
+
+    <h2>API reference</h2>
+    <p>
+      Business clients mint and redeem tGBP through the tGBP API. Its full reference is at
+      <a href="https://mint.tgbp.io/api-reference">mint.tgbp.io/api-reference</a>, behind your
+      tGBP account login.
+    </p>
+    <p>
+      <code>@tgbp/kit/api</code> wraps those endpoints. Staging keys work against the sandbox,
+      which runs on testnets and simulates bank transfers. The
+      <a href="https://github.com/bcp-markets/tgbp-devkit#mint-redeem-and-swap-api">README</a>
+      shows a mint, a redemption and a swap quote.
+    </p>
+
+    <h2>Agents</h2>
+    <p>
+      <code>tgbp-mcp</code> is an MCP server that lets an LLM agent read balances and send, mint,
+      redeem and swap tGBP. Every tool runs behind a spend policy, a JSON file that refuses any
+      action it does not allow: by chain, destination, per-transfer cap and daily cap. A large
+      redemption waits for a human to approve it. One agent skill per action ships with the
+      package.
+    </p>
+    <p>
+      The policy runs inside the server's process. Give the agent the MCP server, never the API key
+      or the wallet key. Setup and every policy field are in the
+      <a href="https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy">README</a>.
+    </p>
+
+    <h2>x402 payments</h2>
+    <p>
+      <a href="https://x402.org">x402</a> lets an HTTP API charge per request, so an agent can pay
+      for a call without an account or an API key. <code>@tgbp/kit/x402/server</code> prices an
+      Express route in pence of tGBP, and <code>@tgbp/kit/x402/client</code> pays it. Both run on
+      Base Sepolia with test tGBP. The payer needs test tGBP but no ETH, because the facilitator
+      pays the gas.
+    </p>
+    <p>
+      The <a href="https://github.com/bcp-markets/tgbp-devkit#x402-payments-base-sepolia">README</a>
+      covers both sides. The
+      <a href="https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-demo">x402 demo</a>
+      runs the whole flow: an agent pays 5p for an API call.
+    </p>
+
+    <h2>Community</h2>
+    <p>
+      Ask questions and request test tGBP in the
+      <a href="https://t.me/tgbpdevs">tGBP developers Telegram group</a>.
+    </p>
+    <div class="warning" role="note">
+      <strong>Admins never DM first.</strong> No tGBP admin will message you before you message
+      them, and none will ask for a private key, a seed phrase or a payment. Anyone who does is
+      an impostor: block and report them.
+    </div>
+
+    <h2>Describing tGBP</h2>
+    <p>
+      Writing about tGBP in your app or docs? Read <a href="/brand">how to describe tGBP
+      accurately</a> first.
+    </p>
+  </main>
+  <footer>
+    Tokenised GBP is issued by BCP Technologies Ltd.
+    <a href="https://www.tokenisedgbp.com">tokenisedgbp.com</a> ·
+    <a href="https://www.tokenisedgbp.com/.well-known/security.txt">Report a vulnerability</a> ·
+    <a href="/llms.txt">llms.txt</a>
+  </footer>
+</body>
+</html>
