@@ -102,8 +102,9 @@ notifications do not carry the sender.
 ## Mint, redeem and swap API
 
 `@bcptechnologies/tgbp-kit/api` calls the tGBP API with the API key you get at onboarding. It needs only `fetch`
-(Node 20 or later, or a browser). Staging keys work against the sandbox, which runs on testnets
-and simulates bank transfers.
+(Node 20 or later). Run it on your server: an API key acts for your whole account, so never send
+one to a browser. Staging keys work against the sandbox, which runs on testnets and simulates bank
+transfers.
 
 ```ts
 import { createTgbpClient } from '@bcptechnologies/tgbp-kit/api'
@@ -390,37 +391,12 @@ The EVM tests start a local [anvil](https://getfoundry.sh) chain and run against
 double with tGBP's decimals, pause, ban list and custom errors. The Solana tests use an in-memory
 RPC. `pnpm build:fixtures` recompiles the mock contract (it needs `forge`).
 
-### Regenerating the registry
+### Generated files
 
-`src/registry/tokens.generated.ts` is generated from the private `the private tGBP contracts repo` repo. The
-sources are `registry/chains.ts`, `registry/solana.json`, the committed
-`deployments/` artifacts, and `contracts/StableTokenV1OFT.sol`.
-
-```sh
-TGBP_SOURCE_DIR=../tGBP pnpm generate:registry          # rewrite the file
-TGBP_SOURCE_DIR=../tGBP pnpm generate:registry --check  # exit 1 if it has drifted
-```
-
-CI's `registry-drift` job checks out those files with a read-only deploy key on every push and
-daily. It fails when the generated file no longer matches.
-
-### Regenerating the API types
-
-`src/api/core.generated.ts` and `src/api/swap.generated.ts` are generated from `openapi.yaml` and
-`openapi-swap.yaml` in the private `the private API spec repo` repo. The generator keeps only the
-mint, redeem, swap and balance operations, and drops the reference prose. `api-spec.lock` pins
-the commit they come from.
-
-```sh
-TGBP_API_SPEC_DIR=../api-spec pnpm generate:api          # rewrite the files and the pin
-TGBP_API_SPEC_DIR=../api-spec pnpm generate:api --check  # exit 1 if they have drifted
-TGBP_API_SPEC_DIR=../api-spec pnpm check:disclosure      # scan the repo and dist/
-```
-
-CI's `api-drift` job checks out the pinned commit and fails on drift. It then runs the disclosure
-sweep: no signing, custody or banking provider name may appear in this repo or in the published
-build. The sweep reads its pattern from the api-spec vendor-name guard, so the names never
-appear here.
+`src/registry/tokens.generated.ts` and `src/api/*.generated.ts` are generated from private tGBP
+sources, so only the tGBP team can regenerate them. CI checks on `main` and daily that they still
+match their sources. It also checks that no signing, custody or banking provider name appears in
+this repo or in the published build.
 
 ### Sandbox test
 

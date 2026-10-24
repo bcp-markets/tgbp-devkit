@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { buildRegistry } from '../scripts/generate-registry.js'
+import { buildRegistry, type RegistrySources } from '../scripts/generate-registry.js'
 
 const CANONICAL = '0x27f6c8289550fce67f6b50bed1f519966afe5287'
 const MAINNET_MINT = '2zMqyX4AYCk6mgy5UZ2S7zUaLxwERhK5WjqDzkPPbSpW'
@@ -49,6 +49,9 @@ const baseFork = { ...base, hardhatNetwork: 'base-fork', localForkOf: 'base' }
 export const CHAINS = { base, gnosis, sepolia, 'base-sepolia': baseSepolia, arc, 'base-fork': baseFork }
 `
 
+/** Fixture paths: the generator takes the real ones from the environment. */
+const SOURCES: RegistrySources = { chains: 'registry/chains.ts', solana: 'registry/solana.json' }
+
 const MESH = {
   chains: [
     { id: 'base', chainType: 'evm', tokenMintAddress: null },
@@ -63,8 +66,8 @@ function sourceTree(edit: (write: (path: string, body: unknown) => void) => void
     mkdirSync(join(dir, path, '..'), { recursive: true })
     writeFileSync(join(dir, path), typeof body === 'string' ? body : JSON.stringify(body))
   }
-  write('registry/chains.ts', REGISTRY)
-  write('registry/solana.json', MESH)
+  write(SOURCES.chains, REGISTRY)
+  write(SOURCES.solana, MESH)
   write('contracts/StableTokenV1OFT.sol', 'contract StableTokenV1OFT {}')
   // As in tGBP's git tree: base and solana-mainnet artifacts are committed,
   // sepolia's directory holds only other tokens, the rest have none.
@@ -77,7 +80,7 @@ function sourceTree(edit: (write: (path: string, body: unknown) => void) => void
 
 describe('buildRegistry', () => {
   it('lists live, testnet, retired and Solana deployments', () => {
-    const tokens = buildRegistry(sourceTree())
+    const tokens = buildRegistry(sourceTree(), SOURCES)
     expect(tokens.map((t) => [t.chain, t.network, t.status])).toEqual([
       ['base', 'mainnet', 'live'],
       ['gnosis', 'mainnet', 'retired'],
@@ -102,13 +105,13 @@ describe('buildRegistry', () => {
   })
 
   it('skips forks and undeployed chains', () => {
-    const chains = buildRegistry(sourceTree()).map((t) => t.chain)
+    const chains = buildRegistry(sourceTree(), SOURCES).map((t) => t.chain)
     expect(chains).not.toContain('base-fork')
     expect(chains).not.toContain('arc')
   })
 
   it('lists a cleared testnet anomaly at the address that was checked', () => {
-    const token = buildRegistry(sourceTree()).find((t) => t.chain === 'base-sepolia')
+    const token = buildRegistry(sourceTree(), SOURCES).find((t) => t.chain === 'base-sepolia')
     expect(token).toMatchObject({
       network: 'testnet',
       status: 'live',
@@ -120,53 +123,53 @@ describe('buildRegistry', () => {
   it('skips a live anomaly on a mainnet chain, even one cleared as a testnet', () => {
     const dir = sourceTree((write) =>
       write(
-        'registry/chains.ts',
+        SOURCES.chains,
         REGISTRY.replace(
           "hardhatNetwork: 'base-sepolia', chainId: 84532, eid: 40245, isMainnet: false,",
           "hardhatNetwork: 'base-sepolia', chainId: 84532, eid: 40245, isMainnet: true,",
         ),
       ),
     )
-    expect(buildRegistry(dir).map((t) => t.chain)).not.toContain('base-sepolia')
+    expect(buildRegistry(dir, SOURCES).map((t) => t.chain)).not.toContain('base-sepolia')
   })
 
   it('skips a live mainnet anomaly even when its artifact is committed', () => {
     const dir = sourceTree((write) =>
       write(
-        'registry/chains.ts',
+        SOURCES.chains,
         REGISTRY.replace(
           "oftAddress: MAINNET_OFT_ADDRESS,\n  blockExplorer: { name: 'BaseScan'",
           "oftAddress: MAINNET_OFT_ADDRESS, knownAnomaly: { reason: 'x' },\n  blockExplorer: { name: 'BaseScan'",
         ),
       ),
     )
-    expect(buildRegistry(dir).map((t) => t.chain)).not.toContain('base')
+    expect(buildRegistry(dir, SOURCES).map((t) => t.chain)).not.toContain('base')
   })
 
   it('skips a live testnet anomaly nobody has cleared', () => {
     const dir = sourceTree((write) =>
       write(
-        'registry/chains.ts',
+        SOURCES.chains,
         REGISTRY.replace(
           "browserUrl: 'https://sepolia.etherscan.io' },",
           "browserUrl: 'https://sepolia.etherscan.io' }, knownAnomaly: { reason: 'x' },",
         ),
       ),
     )
-    expect(buildRegistry(dir).map((t) => t.chain)).not.toContain('sepolia')
+    expect(buildRegistry(dir, SOURCES).map((t) => t.chain)).not.toContain('sepolia')
   })
 
   it('fails when a cleared testnet anomaly moves to another address', () => {
     const dir = sourceTree((write) =>
       write(
-        'registry/chains.ts',
+        SOURCES.chains,
         REGISTRY.replace(
           "eid: 40245, isMainnet: false,\n  oftDeploymentName: 'StableTokenV1OFT', oftAddress: MAINNET_OFT_ADDRESS,",
           "eid: 40245, isMainnet: false,\n  oftDeploymentName: 'StableTokenV1OFT', oftAddress: '0x0000000000000000000000000000000000000002',",
         ),
       ),
     )
-    expect(() => buildRegistry(dir)).toThrow(
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(
       /base-sepolia: oftAddress .* is not the address checked/,
     )
   })
@@ -174,7 +177,7 @@ describe('buildRegistry', () => {
   it('fails when a field it reads is an imported value', () => {
     const dir = sourceTree((write) =>
       write(
-        'registry/chains.ts',
+        SOURCES.chains,
         REGISTRY.replace(
           "import { CANONICAL_OWNER } from './owners'",
           "import { CANONICAL_OWNER, Flags } from './owners'",
@@ -184,14 +187,14 @@ describe('buildRegistry', () => {
         ),
       ),
     )
-    expect(() => buildRegistry(dir)).toThrow(/base: isMainnet is an imported value/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/base: isMainnet is an imported value/)
   })
 
   it('fails on a __proto__ key', () => {
     const dir = sourceTree((write) =>
-      write('registry/chains.ts', 'export const CHAINS = { __proto__: {} }'),
+      write(SOURCES.chains, 'export const CHAINS = { __proto__: {} }'),
     )
-    expect(() => buildRegistry(dir)).toThrow(/__proto__/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/__proto__/)
   })
 
   it('fails when the registry address disagrees with a committed artifact', () => {
@@ -200,28 +203,30 @@ describe('buildRegistry', () => {
         address: '0x0000000000000000000000000000000000000001',
       }),
     )
-    expect(() => buildRegistry(dir)).toThrow(/base: chain registry oftAddress .* != deployment/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(
+      /base: chain registry oftAddress .* != deployment/,
+    )
   })
 
-  it('fails when a Solana artifact disagrees with Solana targets', () => {
+  it('fails when a Solana artifact disagrees with the Solana targets', () => {
     const dir = sourceTree((write) =>
       write('deployments/solana-testnet/OFT.json', { mint: MAINNET_MINT }),
     )
-    expect(() => buildRegistry(dir)).toThrow(/solana-devnet: Solana targets mint/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/solana-devnet: Solana targets mint/)
   })
 
   it('fails on a Solana chain it has no cluster for', () => {
     const dir = sourceTree((write) =>
-      write('registry/solana.json', {
+      write(SOURCES.solana, {
         chains: [...MESH.chains, { id: 'eclipse', chainType: 'solana', tokenMintAddress: null }],
       }),
     )
-    expect(() => buildRegistry(dir)).toThrow(/Solana chain "eclipse"/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/list chain "eclipse"/)
   })
 
   it('fails on a deployment directory it cannot place', () => {
     const dir = sourceTree((write) => write('deployments/zksync/StableTokenV1OFT.json', {}))
-    expect(() => buildRegistry(dir)).toThrow(/deployments\/zksync/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/deployments\/zksync/)
   })
 
   it('fails when the contract overrides decimals()', () => {
@@ -231,13 +236,11 @@ describe('buildRegistry', () => {
         'contract X { function decimals() public pure returns (uint8) { return 6; } }',
       ),
     )
-    expect(() => buildRegistry(dir)).toThrow(/overrides decimals/)
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/overrides decimals/)
   })
 
   it('fails loudly on source it cannot evaluate', () => {
-    const dir = sourceTree((write) =>
-      write('registry/chains.ts', 'export const CHAINS = buildChains()'),
-    )
-    expect(() => buildRegistry(dir)).toThrow(/unsupported expression CallExpression/)
+    const dir = sourceTree((write) => write(SOURCES.chains, 'export const CHAINS = buildChains()'))
+    expect(() => buildRegistry(dir, SOURCES)).toThrow(/unsupported expression CallExpression/)
   })
 })
