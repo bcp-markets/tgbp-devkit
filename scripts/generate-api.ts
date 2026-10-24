@@ -194,16 +194,16 @@ export async function renderSpec(
   ].join('\n')
 }
 
-export function specCommit(apiDocsDir: string): string {
-  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: apiDocsDir, encoding: 'utf8' }).trim()
+export function specCommit(apiSpecDir: string): string {
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: apiSpecDir, encoding: 'utf8' }).trim()
 }
 
 /** Renders every spec. Throws if any output would name a provider. */
-export async function buildApiTypes(apiDocsDir: string): Promise<Map<string, string>> {
-  const pattern = loadVendorPattern(vendorGuardPath(apiDocsDir))
+export async function buildApiTypes(apiSpecDir: string): Promise<Map<string, string>> {
+  const pattern = loadVendorPattern(vendorGuardPath(apiSpecDir))
   const files = new Map<string, string>()
   for (const { source, output, operations } of SPECS) {
-    const spec = parse(readFileSync(join(apiDocsDir, source), 'utf8')) as JsonObject
+    const spec = parse(readFileSync(join(apiSpecDir, source), 'utf8')) as JsonObject
     const rendered = await renderSpec(spec, source, operations)
     const hits = findDisclosures(pattern, output, rendered)
     if (hits.length > 0) {
@@ -216,19 +216,19 @@ export async function buildApiTypes(apiDocsDir: string): Promise<Map<string, str
 }
 
 async function main(): Promise<void> {
-  const apiDocsDir = process.env.TGBP_API_SPEC_DIR
-  if (!apiDocsDir) {
+  const apiSpecDir = process.env.TGBP_API_SPEC_DIR
+  if (!apiSpecDir) {
     console.error('Set TGBP_API_SPEC_DIR to a checkout of the private API spec repo')
     process.exit(2)
   }
-  const dir = resolve(apiDocsDir)
+  const dir = resolve(apiSpecDir)
   const check = process.argv.includes('--check')
   // api-spec.lock pins a commit, so types built from uncommitted edits would claim a source they lack.
   if (!check) {
     const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' })
     if (status.trim() !== '') {
       console.error(
-        `${apiDocsDir} has uncommitted changes; commit or discard them, then regenerate`,
+        `${apiSpecDir} has uncommitted changes; commit or discard them, then regenerate`,
       )
       process.exit(1)
     }
@@ -238,7 +238,7 @@ async function main(): Promise<void> {
   if (check) {
     const pinned = existsSync(LOCK_PATH) ? readFileSync(LOCK_PATH, 'utf8').trim() : ''
     let drifted = pinned !== commit
-    if (drifted) console.error(`${apiDocsDir} is at ${commit}, but api-spec.lock pins ${pinned}`)
+    if (drifted) console.error(`${apiSpecDir} is at ${commit}, but api-spec.lock pins ${pinned}`)
     for (const [path, rendered] of files) {
       if ((existsSync(path) ? readFileSync(path, 'utf8') : '') !== rendered) {
         console.error(`${path} has drifted from the pinned spec; run pnpm generate:api`)

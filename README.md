@@ -102,8 +102,8 @@ notifications do not carry the sender.
 ## Mint, redeem and swap API
 
 `@bcptechnologies/tgbp-kit/api` calls the tGBP API with the API key you get at onboarding. It needs only `fetch`
-(Node 20 or later). Run it on your server: an API key acts for your whole account, so never send
-one to a browser. Staging keys work against the sandbox, which runs on testnets and simulates bank
+(Node 20 or later). Run it on your server: API keys carry no scopes, so never send one to a
+browser. Staging keys work against the sandbox, which runs on testnets and simulates bank
 transfers.
 
 ```ts

@@ -64,6 +64,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # An empty repository input would check out this public repo instead.
+      - name: Check the tgbp-source secrets are set
+        env:
+          REPO: ${{ secrets.TGBP_SOURCE_REPO }}
+          CHAINS: ${{ secrets.TGBP_REGISTRY_CHAINS }}
+          SOLANA: ${{ secrets.TGBP_REGISTRY_SOLANA }}
+        run: test -n "$REPO" && test -n "$CHAINS" && test -n "$SOLANA"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -109,6 +116,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check the tgbp-source secrets are set
+        env:
+          REPO: ${{ secrets.TGBP_API_SPEC_REPO }}
+          GUARD: ${{ secrets.TGBP_VENDOR_GUARD }}
+        run: test -n "$REPO" && test -n "$GUARD"
       - name: Read the pinned spec commit
         id: pin
         run: |

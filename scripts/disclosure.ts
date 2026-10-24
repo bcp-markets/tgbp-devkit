@@ -44,7 +44,13 @@ export function vendorGuardPath(apiSpecDir: string): string {
 /** Reads `VENDOR_PATTERN` from the vendor-name guard. Throws if it is not there. */
 export function loadVendorPattern(guardPath: string): RegExp {
   // The guard's path is not public either, so no error below names it.
-  const guard = readFileSync(guardPath, 'utf8')
+  let guard: string
+  try {
+    guard = readFileSync(guardPath, 'utf8')
+  } catch {
+    // Node's message would quote the path into a public CI log.
+    throw new Error('vendor guard: cannot read the file TGBP_VENDOR_GUARD names')
+  }
   const match = /const VENDOR_PATTERN\s*=\s*\/((?:\\.|[^/\\\n])+)\/([a-z]*);/.exec(guard)
   if (!match?.[1]) {
     throw new Error('vendor guard: VENDOR_PATTERN not found; the guard has changed shape')

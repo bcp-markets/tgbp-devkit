@@ -151,6 +151,12 @@ describe('disclosure sweep', () => {
     ])
   })
 
+  it('refuses a guard it cannot read, without echoing its path', () => {
+    const error = loadVendorPatternError(join(tmpdir(), 'secret-guard-path', 'guard.js'))
+    expect(error).toMatch(/cannot read/)
+    expect(error).not.toContain('secret-guard-path')
+  })
+
   it('throws when the guard no longer has the pattern, rather than sweeping nothing', () => {
     expect(() => loadVendorPattern(guardDir('module.exports = {}\n'))).toThrow(/VENDOR_PATTERN/)
   })
