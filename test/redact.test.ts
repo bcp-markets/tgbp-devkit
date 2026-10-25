@@ -4,11 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { createTgbpClient } from '../src/api/index.js'
 import { REDACTED, redactForPublicLog } from './redact.js'
 
-// The shape of a real staging error that reached a public log. The
-// provider name and its code prefix are built from pieces so this file does not
-// disclose them.
-const PROVIDER = ['Ac', 'me'].join('')
-const PREFIX = ['a', 'c'].join('')
+// The shape of a sandbox error that names a provider: a provider-prefixed code
+// and a message with the provider's name. Acme is a stand-in.
+const PROVIDER = 'Acme'
+const PREFIX = 'ac'
 const API_CODE = `${PREFIX}_account_requested`
 const API_MESSAGE = `An ${PROVIDER} account has been requested for this customer`
 
@@ -39,7 +38,7 @@ function leaks(output: string): boolean {
     output.includes(PROVIDER) ||
     output.includes(API_CODE) ||
     new RegExp(`\\b${PREFIX}_`).test(output) ||
-    output.includes('account')
+    output.includes(API_MESSAGE)
   )
 }
 

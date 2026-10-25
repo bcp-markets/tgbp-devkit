@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { findDisclosures, loadVendorPattern } from '../scripts/disclosure.js'
+import { findDisclosures, loadVendorPattern, vendorGuardPath } from '../scripts/disclosure.js'
 import { pruneSpec, renderSpec } from '../scripts/generate-api.js'
 
 const SPEC = {
@@ -108,13 +108,12 @@ function loadVendorPatternError(dir: string): string {
 
 describe('disclosure sweep', () => {
   function guardDir(source: string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'api-spec-'))
-    mkdirSync(join(dir, 'scripts'))
-    writeFileSync(join(dir, 'vendor-guard.js'), source)
-    return dir
+    const path = join(mkdtempSync(join(tmpdir(), 'api-spec-')), 'guard.js')
+    writeFileSync(path, source)
+    return path
   }
 
-  it('reads the pattern from the api-spec guard', () => {
+  it('reads the pattern from the vendor-name guard', () => {
     const dir = guardDir(
       '// acme bank\nconst VENDOR_PATTERN =\n  /(?:acme[\\s._-]*bank|\\bab\\b)/i;\n',
     )
@@ -152,6 +151,12 @@ describe('disclosure sweep', () => {
     ])
   })
 
+  it('refuses a guard it cannot read, without echoing its path', () => {
+    const error = loadVendorPatternError(join(tmpdir(), 'secret-guard-path', 'guard.js'))
+    expect(error).toMatch(/cannot read/)
+    expect(error).not.toContain('secret-guard-path')
+  })
+
   it('throws when the guard no longer has the pattern, rather than sweeping nothing', () => {
     expect(() => loadVendorPattern(guardDir('module.exports = {}\n'))).toThrow(/VENDOR_PATTERN/)
   })
@@ -162,5 +167,37 @@ describe('disclosure sweep', () => {
       { file: 'src/x.ts', line: 2 },
       { file: 'src/x.ts', line: 4 },
     ])
+  })
+
+  it('catches a name split into string literals, whatever joins them at runtime', () => {
+    const source = [
+      "const a = ['Ac', 'me'].join('')",
+      'const b = "Ac" + "me"',
+      'const c = [',
+      "  'Ac',",
+      "  'me',",
+      "].join('')",
+      "const d = ['Ac', 'me'].join(' ')",
+    ].join('\n')
+    expect(findDisclosures(/acme/i, 'test/x.ts', source)).toEqual([
+      { file: 'test/x.ts', line: 1 },
+      { file: 'test/x.ts', line: 2 },
+      { file: 'test/x.ts', line: 4 },
+      { file: 'test/x.ts', line: 7 },
+    ])
+  })
+
+  it('reports a joined hit once, on a line that also matches whole', () => {
+    expect(findDisclosures(/acme/i, 'x.ts', "Acme ['Ac', 'me']")).toEqual([
+      { file: 'x.ts', line: 1 },
+    ])
+  })
+
+  it('reads the guard path from TGBP_VENDOR_GUARD, and refuses to run without it', () => {
+    vi.stubEnv('TGBP_VENDOR_GUARD', 'tools/guard.js')
+    expect(vendorGuardPath('/spec')).toBe(join('/spec', 'tools/guard.js'))
+    vi.stubEnv('TGBP_VENDOR_GUARD', '')
+    expect(() => vendorGuardPath('/spec')).toThrow(/TGBP_VENDOR_GUARD/)
+    vi.unstubAllEnvs()
   })
 })
