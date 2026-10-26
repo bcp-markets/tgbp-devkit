@@ -417,6 +417,10 @@ pnpm dlx wrangler@4.119.0 dev --cwd site      # serve locally
 pnpm dlx wrangler@4.119.0 deploy --cwd site   # publish; needs Cloudflare access
 ```
 
+## Support
+
+Email [support@tgbp.io](mailto:support@tgbp.io), or ask in the [tGBP developers Telegram group](https://t.me/tgbpdevs).
+
 ## Security
 
 Report vulnerabilities as described at <https://tokenisedgbp.com/.well-known/security.txt>.
