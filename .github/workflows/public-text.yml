@@ -1,0 +1,66 @@
+name: Public text
+
+# This repo is public. Internal issue keys (TGBP-123) stay out of what it
+# publishes for good: commit messages, and the PR title, body and branch name
+# that a merge commit records. A key in a pull request fails this check; fix
+# it before merging, because history on main is never rewritten.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  issue-keys:
+    name: No internal issue keys
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, so every commit in the range can be read.
+          fetch-depth: 0
+      # Untrusted text travels through env, never through an expression in the script.
+      - name: Check the pull request and its commits
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          key='[Tt][Gg][Bb][Pp]-[0-9]+'
+          failed=0
+          for field in TITLE BODY BRANCH; do
+            if printf '%s' "${!field}" | grep -Eq "$key"; then
+              echo "::error::The pull request ${field,,} names an internal issue key. Remove it."
+              failed=1
+            fi
+          done
+          for sha in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
+            if git log -1 --format=%B "$sha" | grep -Eq "$key"; then
+              echo "::error::Commit $sha names an internal issue key in its message. Reword it."
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Check the pushed commits
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          key='[Tt][Gg][Bb][Pp]-[0-9]+'
+          failed=0
+          for sha in $(git rev-list "$BEFORE..$AFTER"); do
+            if git log -1 --format=%B "$sha" | grep -Eq "$key"; then
+              echo "::error::Commit $sha on main names an internal issue key. History on main is not rewritten; keep the next one clean."
+              failed=1
+            fi
+          done
+          exit "$failed"

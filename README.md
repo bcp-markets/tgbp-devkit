@@ -420,6 +420,11 @@ The EVM tests start a local [anvil](https://getfoundry.sh) chain and run against
 double with tGBP's decimals, pause, ban list and custom errors. The Solana tests use an in-memory
 RPC. `pnpm build:fixtures` recompiles the mock contract (it needs `forge`).
 
+### Public text
+
+This repo is public. Commit messages, pull request titles and bodies, and branch names carry no
+internal issue keys. The `Public text` workflow fails a pull request that names one.
+
 ### Generated files
 
 `src/registry/tokens.generated.ts`, `src/api/*.generated.ts` and `python/spec/*.json` are
