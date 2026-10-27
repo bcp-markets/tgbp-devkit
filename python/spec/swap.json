@@ -1,0 +1,1337 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": ""
+  },
+  "paths": {
+    "/api/conversions": {
+      "post": {
+        "operationId": "createConversion",
+        "tags": [
+          "Swaps & Conversions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyOptional"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Conversion"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/deposit-balance": {
+      "get": {
+        "operationId": "getDepositBalance",
+        "tags": [
+          "Networks & Deposits"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChainId"
+          },
+          {
+            "$ref": "#/components/parameters/Direction"
+          },
+          {
+            "$ref": "#/components/parameters/IntentIdQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DepositBalance"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/deposit-session": {
+      "get": {
+        "operationId": "getDepositSession",
+        "tags": [
+          "Networks & Deposits"
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DepositSession"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/deposit-session/address": {
+      "post": {
+        "operationId": "createDepositAddress",
+        "tags": [
+          "Networks & Deposits"
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DepositSession"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/deposits": {
+      "get": {
+        "operationId": "listDeposits",
+        "tags": [
+          "Networks & Deposits"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChainId"
+          },
+          {
+            "$ref": "#/components/parameters/IntentIdQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Deposit"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/limits": {
+      "get": {
+        "operationId": "getLimits",
+        "tags": [
+          "Pricing & Liquidity"
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SwapLimits"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/quote": {
+      "get": {
+        "operationId": "getQuote",
+        "tags": [
+          "Pricing & Liquidity"
+        ],
+        "parameters": [
+          {
+            "name": "usdcAmount",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tgbpAmount",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SwapDirection"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Quote"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/supported-networks": {
+      "get": {
+        "operationId": "getSupportedNetworks",
+        "tags": [
+          "Networks & Deposits"
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SupportedNetwork"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/swap-intents": {
+      "post": {
+        "operationId": "createSwapIntent",
+        "tags": [
+          "Swaps & Conversions"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSwapIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SwapIntent"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/swap-intents/{id}": {
+      "get": {
+        "operationId": "getSwapIntent",
+        "tags": [
+          "Swaps & Conversions"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SwapIntentId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SwapIntent"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/swap-intents/{id}/cancel": {
+      "post": {
+        "operationId": "cancelSwapIntent",
+        "tags": [
+          "Swaps & Conversions"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SwapIntentId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SwapIntent"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "ChainId": {
+        "name": "chainId",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ChainId"
+        }
+      },
+      "Direction": {
+        "name": "direction",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/SwapDirection"
+        }
+      },
+      "IdempotencyKeyOptional": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IntentIdQuery": {
+        "name": "intentId",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/SwapIntentId"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "headers": {
+          "X-Rate-Limit-Limit": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Remaining": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Reset": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Retry-After": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ChainId": {
+        "type": "string",
+        "enum": [
+          "base",
+          "sepolia"
+        ]
+      },
+      "Conversion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "targetCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "usdcAmount": {
+            "type": "string"
+          },
+          "gbpAmount": {
+            "type": "string"
+          },
+          "effectiveRate": {
+            "type": "string"
+          },
+          "discountBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "minimumTargetAmount": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConversionStatus"
+          }
+        }
+      },
+      "ConversionStatus": {
+        "type": "string",
+        "enum": [
+          "requested",
+          "sweep_pending",
+          "submitted",
+          "minted",
+          "transferred",
+          "failed"
+        ]
+      },
+      "CreateConversionRequest": {
+        "type": "object",
+        "required": [
+          "chainId"
+        ],
+        "properties": {
+          "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/SwapDirection"
+          },
+          "intentId": {
+            "$ref": "#/components/schemas/SwapIntentId"
+          },
+          "recipientAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "usdcAmount": {
+            "type": "string"
+          },
+          "tgbpAmount": {
+            "type": "string"
+          },
+          "minOut": {
+            "type": "string"
+          },
+          "minTargetAmount": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateSwapIntentRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "chainId",
+          "direction",
+          "recipientAddress",
+          "sourceAmount",
+          "sourceRawAmount"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/SwapIntentId"
+          },
+          "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/SwapDirection"
+          },
+          "recipientAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "sourceAmount": {
+            "type": "string"
+          },
+          "sourceRawAmount": {
+            "type": "string"
+          },
+          "targetAmount": {
+            "type": "string",
+            "deprecated": true
+          }
+        }
+      },
+      "Currency": {
+        "type": "string",
+        "enum": [
+          "USDC",
+          "tGBP"
+        ]
+      },
+      "Deposit": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chainId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "confirmed",
+              "converted"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "confirmedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "txHash": {
+            "type": "string"
+          },
+          "logIndex": {
+            "type": "integer"
+          },
+          "fromAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "toAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "tokenSymbol": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "tokenDecimals": {
+            "type": "integer"
+          },
+          "rawAmount": {
+            "type": "string"
+          },
+          "confirmationsSeen": {
+            "type": "integer"
+          },
+          "exchange": {
+            "$ref": "#/components/schemas/DepositExchange"
+          }
+        }
+      },
+      "DepositBalance": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "rawAmount": {
+            "type": "string"
+          },
+          "pendingAmount": {
+            "type": "string"
+          },
+          "pendingRawAmount": {
+            "type": "string"
+          },
+          "tokenSymbol": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "tokenDecimals": {
+            "type": "integer"
+          },
+          "tokenAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "depositAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "settlementRecipientAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "settlementRecipientSource": {
+            "type": "string",
+            "enum": [
+              "configured_tgbp_recipient",
+              "source_depositor"
+            ]
+          },
+          "settlementRecipientOptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettlementRecipientOption"
+            }
+          }
+        }
+      },
+      "DepositExchange": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "targetCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "usdcAmount": {
+            "type": "string"
+          },
+          "gbpAmount": {
+            "type": "string"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "effectiveRate": {
+            "type": "string"
+          },
+          "discountBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "minimumTargetAmount": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConversionStatus"
+          },
+          "tgbpTransferTxHash": {
+            "type": "string"
+          }
+        }
+      },
+      "DepositSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "address_required",
+              "active",
+              "risk_hold",
+              "disabled"
+            ]
+          },
+          "canGenerateAddress": {
+            "type": "boolean"
+          },
+          "addressGenerationDisabledReason": {
+            "type": "string"
+          },
+          "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "chainName": {
+            "type": "string"
+          },
+          "depositAddress": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EvmAddress"
+              }
+            ]
+          },
+          "tokenSymbol": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "tokenAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "tokenDecimals": {
+            "type": "integer"
+          },
+          "requiredConfirmations": {
+            "type": "integer"
+          },
+          "availableNetworks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportedNetwork"
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "EvmAddress": {
+        "type": "string",
+        "pattern": "^0x[a-fA-F0-9]{40}$"
+      },
+      "PricingPairQuality": {
+        "type": "object",
+        "properties": {
+          "pair": {
+            "type": "string",
+            "enum": [
+              "USDC/USD",
+              "USD/GBP"
+            ]
+          },
+          "minimumSourceCount": {
+            "type": "integer"
+          },
+          "sourceCount": {
+            "type": "integer"
+          },
+          "quorumMet": {
+            "type": "boolean"
+          },
+          "sourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ejectedSourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "oldestObservationAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "oldestFetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "sourceTimestampsComplete": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PricingProviderQuote": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "pair": {
+            "type": "string",
+            "enum": [
+              "USDC/USD",
+              "USD/GBP"
+            ]
+          },
+          "rate": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceUrl": {
+            "type": "string"
+          },
+          "sourceAsOf": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sourceTimestampComplete": {
+            "type": "boolean"
+          },
+          "sourceUrls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PricingQuality": {
+        "type": "object",
+        "properties": {
+          "degraded": {
+            "type": "boolean"
+          },
+          "degradedReasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pairs": {
+            "type": "object",
+            "properties": {
+              "usdcUsd": {
+                "$ref": "#/components/schemas/PricingPairQuality"
+              },
+              "usdGbp": {
+                "$ref": "#/components/schemas/PricingPairQuality"
+              }
+            }
+          }
+        }
+      },
+      "Quote": {
+        "type": "object",
+        "required": [
+          "direction",
+          "sourceCurrency",
+          "targetCurrency",
+          "usdcAmount",
+          "usdcRawAmount",
+          "gbpAmount",
+          "usdcGbpRate",
+          "effectiveRate",
+          "discountBps",
+          "roundingPolicy",
+          "createdAt",
+          "rateExpiresAt",
+          "rateRefreshSeconds"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/SwapDirection"
+          },
+          "sourceCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "targetCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "usdcAmount": {
+            "type": "string"
+          },
+          "usdcRawAmount": {
+            "type": "string"
+          },
+          "gbpAmount": {
+            "type": "string"
+          },
+          "gbpRawAmount": {
+            "type": "string"
+          },
+          "usdcGbpRate": {
+            "type": "string"
+          },
+          "effectiveRate": {
+            "type": "string"
+          },
+          "discountBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "firmQuoteBufferBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "usdcUsdRate": {
+            "type": "string"
+          },
+          "usdGbpRate": {
+            "type": "string"
+          },
+          "realtimeUsdcGbpRate": {
+            "type": "string"
+          },
+          "timeWeightedUsdcGbpRate": {
+            "type": "string"
+          },
+          "providerQuotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PricingProviderQuote"
+            }
+          },
+          "pricingMode": {
+            "type": "string",
+            "enum": [
+              "production",
+              "staging"
+            ]
+          },
+          "pricingMarketDataAsOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pricingMarketDataFetchedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pricingQuality": {
+            "$ref": "#/components/schemas/PricingQuality"
+          },
+          "roundingPolicy": {
+            "type": "string",
+            "enum": [
+              "round_down_to_18_decimals",
+              "round_down_to_6_decimals"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rateExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rateRefreshSeconds": {
+            "type": "integer"
+          }
+        }
+      },
+      "SettlementRecipientOption": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "SupportedNetwork": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "chainId": {
+            "type": "integer"
+          },
+          "tokenSymbol": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "tokenAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "tokenDecimals": {
+            "type": "integer"
+          },
+          "requiredConfirmations": {
+            "type": "integer"
+          }
+        }
+      },
+      "SwapDirection": {
+        "type": "string",
+        "enum": [
+          "USDC_TO_TGBP",
+          "TGBP_TO_USDC"
+        ]
+      },
+      "SwapIntent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/SwapIntentId"
+          },
+          "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/SwapDirection"
+          },
+          "recipientAddress": {
+            "$ref": "#/components/schemas/EvmAddress"
+          },
+          "sourceAmount": {
+            "type": "string"
+          },
+          "sourceRawAmount": {
+            "type": "string"
+          },
+          "sourceCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "targetAmount": {
+            "type": "string"
+          },
+          "targetRawAmount": {
+            "type": "string"
+          },
+          "targetCurrency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "cancelled",
+              "expired",
+              "withdrawn",
+              "converted",
+              "failed"
+            ]
+          },
+          "quoteVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "quote": {
+            "$ref": "#/components/schemas/Quote"
+          },
+          "firmQuoteBufferBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "fillBy": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "filledAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "withdrawnAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "withdrawalReason": {
+            "type": "string"
+          },
+          "failureReason": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activeUntil": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SwapIntentId": {
+        "type": "string",
+        "minLength": 6,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9_-]+$"
+      },
+      "SwapLimits": {
+        "type": "object",
+        "required": [
+          "dailyLimitUsd",
+          "dailyRemainingUsd",
+          "minTransactionUsd",
+          "maxTransactionUsd"
+        ],
+        "properties": {
+          "dailyLimitUsd": {
+            "type": "string"
+          },
+          "dailyRemainingUsd": {
+            "type": "string"
+          },
+          "minTransactionUsd": {
+            "type": "string"
+          },
+          "maxTransactionUsd": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

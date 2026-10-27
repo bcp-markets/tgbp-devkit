@@ -1,0 +1,83 @@
+{
+  "mint": {
+    "id": "mint_1",
+    "customerId": "customer_1",
+    "chain": "sepolia",
+    "address": "0x1111111111111111111111111111111111111111",
+    "tx_hash": null,
+    "amount": {
+      "currency": "GBP",
+      "value": 10.1
+    },
+    "status": "pending",
+    "credited_at": null,
+    "created_at": "2026-10-27T12:00:00Z",
+    "updated_at": "2026-10-27T12:00:00Z",
+    "paymentType": "first_party",
+    "relationshipToCustomer": "other",
+    "nameOfPayer": null,
+    "bank_transfer_details": {
+      "reference": "TGBP-REF-1"
+    }
+  },
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total": 1,
+    "has_next": false,
+    "has_prev": false
+  },
+  "redemption": {
+    "redemptionId": "red_1",
+    "chain": "sepolia",
+    "burnAddress": "0x2222222222222222222222222222222222222222",
+    "amount": {
+      "currency": "GBP",
+      "amount": "25.00"
+    },
+    "fees": {
+      "currency": "GBP",
+      "amount": "0.00"
+    },
+    "bankAccount": null,
+    "status": "pending",
+    "tx_hash": null,
+    "created_at": "2026-10-27T12:00:00Z",
+    "updated_at": "2026-10-27T12:00:00Z"
+  },
+  "quote": {
+    "direction": "USDC_TO_TGBP",
+    "sourceCurrency": "USDC",
+    "targetCurrency": "tGBP",
+    "usdcAmount": "100",
+    "usdcRawAmount": "100000000",
+    "gbpAmount": "74.5",
+    "usdcGbpRate": "0.745",
+    "effectiveRate": "0.745",
+    "discountBps": 0,
+    "roundingPolicy": "round_down_to_18_decimals",
+    "rateRefreshSeconds": 30,
+    "createdAt": "2026-10-27T12:00:00Z",
+    "rateExpiresAt": "2026-10-27T12:00:30Z"
+  },
+  "limits": {
+    "minTransactionUsd": "10",
+    "maxTransactionUsd": "100000",
+    "dailyLimitUsd": "250000",
+    "dailyRemainingUsd": "250000"
+  },
+  "swap_intent": {
+    "id": "intent_000001",
+    "status": "active",
+    "chainId": "sepolia",
+    "direction": "USDC_TO_TGBP",
+    "createdAt": "2026-10-27T12:00:00Z"
+  },
+  "deposit_session": {
+    "id": "session_1",
+    "status": "active",
+    "canGenerateAddress": true,
+    "chainId": "sepolia",
+    "depositAddress": "0x3333333333333333333333333333333333333333"
+  }
+}

@@ -8,10 +8,13 @@ tGBP has 18 decimals on EVM chains and 9 on Solana. Test tGBP on Base Sepolia ha
 
 - [Home](https://dev.tokenisedgbp.com/): what tGBP is, the kit's modules, the API reference, the agent MCP server, x402 payments and the developer community.
 - [Quickstart](https://dev.tokenisedgbp.com/quickstart): from a clean machine to a confirmed test tGBP transfer on Base Sepolia.
+- [Python quickstart](https://dev.tokenisedgbp.com/python): a test mint on the tGBP sandbox with tgbp-kit, the Python API client.
 - [Describe tGBP accurately](https://dev.tokenisedgbp.com/brand): the name, the claims to make and the claims to avoid.
 
 ## Code
 
 - [@bcptechnologies/tgbp-kit README](https://github.com/bcp-markets/tgbp-devkit#readme): every helper and error code.
+- [tgbp-kit for Python README](https://github.com/bcp-markets/tgbp-devkit/tree/main/python#readme): the Python client for the mint, redeem and swap API.
+- [Python quickstart script](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/python-quickstart): the file the Python quickstart uses.
 - [Quickstart scripts](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/quickstart): the files the quickstart uses.
 - [x402 demo](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-demo): an agent pays 5p of test tGBP for an API call on Base Sepolia.

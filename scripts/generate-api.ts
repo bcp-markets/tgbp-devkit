@@ -12,6 +12,9 @@
  * discloses endpoint shapes, not the reference text. The output must also
  * pass the disclosure sweep before it is written.
  *
+ * The same pruned specs are written as JSON under python/spec/, for the
+ * Python package's model generator (python/scripts/generate_models.py).
+ *
  * api-spec.lock pins the spec commit the types come from. CI checks
  * out exactly that commit and runs --check, so the types cannot drift from
  * the pin, and the pin moves only when someone regenerates.
@@ -31,6 +34,7 @@ export const SPECS = [
   {
     source: 'openapi.yaml',
     output: fileURLToPath(new URL('../src/api/core.generated.ts', import.meta.url)),
+    pythonSpec: fileURLToPath(new URL('../python/spec/core.json', import.meta.url)),
     operations: [
       'createMint',
       'getMintById',
@@ -48,6 +52,7 @@ export const SPECS = [
   {
     source: 'openapi-swap.yaml',
     output: fileURLToPath(new URL('../src/api/swap.generated.ts', import.meta.url)),
+    pythonSpec: fileURLToPath(new URL('../python/spec/swap.json', import.meta.url)),
     operations: [
       'getQuote',
       'getLimits',
@@ -198,19 +203,24 @@ export function specCommit(apiSpecDir: string): string {
   return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: apiSpecDir, encoding: 'utf8' }).trim()
 }
 
-/** Renders every spec. Throws if any output would name a provider. */
+/** Renders every spec, as TypeScript and as pruned JSON. Throws if any output would name a provider. */
 export async function buildApiTypes(apiSpecDir: string): Promise<Map<string, string>> {
   const pattern = loadVendorPattern(vendorGuardPath(apiSpecDir))
   const files = new Map<string, string>()
-  for (const { source, output, operations } of SPECS) {
+  for (const { source, output, pythonSpec, operations } of SPECS) {
     const spec = parse(readFileSync(join(apiSpecDir, source), 'utf8')) as JsonObject
-    const rendered = await renderSpec(spec, source, operations)
-    const hits = findDisclosures(pattern, output, rendered)
-    if (hits.length > 0) {
-      const lines = hits.map((hit) => hit.line).join(', ')
-      throw new Error(`${source}: generated types name a provider at lines ${lines}`)
+    const outputs: [string, string][] = [
+      [output, await renderSpec(spec, source, operations)],
+      [pythonSpec, `${JSON.stringify(pruneSpec(spec, operations), null, 2)}\n`],
+    ]
+    for (const [path, rendered] of outputs) {
+      const hits = findDisclosures(pattern, path, rendered)
+      if (hits.length > 0) {
+        const lines = hits.map((hit) => hit.line).join(', ')
+        throw new Error(`${source}: generated output ${path} names a provider at lines ${lines}`)
+      }
+      files.set(path, rendered)
     }
-    files.set(output, rendered)
   }
   return files
 }
