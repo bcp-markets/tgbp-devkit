@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Python quickstart · tGBP developers</title>
+  <meta name="description" content="Create a test mint on the tGBP sandbox from Python with tgbp-kit, the typed client for the tGBP mint, redeem and swap API.">
+  <link rel="stylesheet" href="/styles.css">
+  <meta name="theme-color" content="#faf7ef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#09172d" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="tGBP developers">
+  <meta property="og:title" content="Python quickstart · tGBP developers">
+  <meta property="og:description" content="Create a test mint on the tGBP sandbox from Python with tgbp-kit, the typed client for the tGBP mint, redeem and swap API.">
+  <meta property="og:url" content="https://dev.tokenisedgbp.com/python">
+  <meta property="og:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
+  <meta property="og:image:width" content="820">
+  <meta property="og:image:height" content="312">
+  <meta property="og:image:alt" content="tGBP, the British pound stablecoin">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Python quickstart · tGBP developers">
+  <meta name="twitter:description" content="Create a test mint on the tGBP sandbox from Python with tgbp-kit, the typed client for the tGBP mint, redeem and swap API.">
+  <meta name="twitter:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
+  <meta name="twitter:image:alt" content="tGBP, the British pound stablecoin">
+</head>
+<body>
+  <header>
+    <a class="home" href="/"><img src="/assets/tgbp-logo.svg" alt="tGBP" width="107" height="40"> developers</a>
+    <nav>
+      <a href="/quickstart">Quickstart</a>
+      <a href="/python">Python</a>
+      <a href="/brand">Describe tGBP</a>
+      <a href="https://github.com/bcp-markets/tgbp-devkit">GitHub</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Python quickstart</h1>
+    <p>
+      <code>tgbp-kit</code> is the Python client for the tGBP mint, redeem and swap API. It covers
+      the same operations as the TypeScript client, with request and response types generated
+      from the API spec. This guide creates a test mint on the sandbox. You need Python 3.10 or
+      later and a sandbox API key.
+    </p>
+    <p>
+      The script is also in the repo, under
+      <a href="https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/python-quickstart"><code>examples/python-quickstart</code></a>.
+    </p>
+
+    <h2>1. Install the client</h2>
+    <pre><code>python3 -m venv .venv
+. .venv/bin/activate
+pip install tgbp-kit</code></pre>
+
+    <h2>2. Set your sandbox details</h2>
+    <p>
+      The sandbox takes staging API keys and mints on testnets only. Set the key, a verified
+      customer on your account and an approved recipient address for that customer:
+    </p>
+    <pre><code>export TGBP_API_KEY=...
+export TGBP_CUSTOMER_ID=...
+export TGBP_ADDRESS=0x...</code></pre>
+
+    <h2>3. Create a mint</h2>
+    <p>Save this as <code>mint.py</code>:</p>
+    <pre><code>"""Create a test mint on the tGBP sandbox, simulate the bank transfer and follow the mint."""
+
+import os
+import time
+from decimal import Decimal
+
+from tgbp_kit import Created, TgbpClient
+
+tgbp = TgbpClient(api_key=os.environ["TGBP_API_KEY"], environment="sandbox")
+
+result = tgbp.mints.create(
+    {
+        "customerId": os.environ["TGBP_CUSTOMER_ID"],
+        "destinationAddress": os.environ["TGBP_ADDRESS"],
+        "chain": os.environ.get("TGBP_CHAIN", "sepolia"),
+        "amount": {"currency": "GBP", "value": Decimal("25.00")},
+    }
+)
+if not isinstance(result, Created):
+    raise SystemExit(f"A second person must approve this mint: {result.approval_request_id}")
+mint = result.data
+print(f"Created mint {mint.id}. Idempotency key: {result.idempotency_key}")
+
+# Sandbox only: pretend the bank transfer arrived.
+tgbp.mints.simulate_payin(mint.id)
+
+for _ in range(60):
+    mint = tgbp.mints.get(mint.id).data
+    print(f"{mint.id}: {mint.status}")
+    if mint.status in ("confirmed", "in_transit", "failed", "cancelled"):
+        break
+    time.sleep(5)
+else:
+    print("Stopped waiting after 5 minutes. Check again with tgbp.mints.get.")
+</code></pre>
+    <p>Run it:</p>
+    <pre><code>python mint.py</code></pre>
+    <p>
+      The sandbox simulates the bank transfer, and then the mint moves on. It can stop at
+      <code>in_transit</code>, because the sandbox simulates only the first bank leg.
+    </p>
+
+    <h2>Money is never a float</h2>
+    <p>
+      Pass amounts as <code>Decimal</code>, a string or an int. The client raises
+      <code>TypeError</code> on a float, because a float cannot hold most decimal amounts exactly.
+      Amounts in responses come back as <code>Decimal</code>.
+    </p>
+
+    <h2>Retries and idempotency</h2>
+    <p>
+      Every create sends an idempotency key. The client generates one unless you pass
+      <code>idempotency_key=</code>, and returns it on the result. It retries a network error or a
+      5xx with the same key, so a retry returns the first mint instead of a second one. When a call
+      fails, it raises <code>TgbpKitError</code>. Its <code>details</code> name the key to retry
+      with when the call may have taken effect.
+    </p>
+
+    <h2>Next</h2>
+    <ul>
+      <li>Redeem tGBP for GBP with <code>tgbp.redemptions.create</code>.</li>
+      <li>Swap USDC and tGBP with <code>TgbpSwapClient</code>.</li>
+      <li>Read every operation in the <a href="https://github.com/bcp-markets/tgbp-devkit/tree/main/python#readme">Python README</a>.</li>
+    </ul>
+  </main>
+  <footer>
+    Tokenised GBP is issued by BCP Technologies Ltd.
+    <a href="https://www.tokenisedgbp.com">tokenisedgbp.com</a> ·
+    <a href="https://www.tokenisedgbp.com/.well-known/security.txt">Report a vulnerability</a> ·
+    <a href="/llms.txt">llms.txt</a>
+  </footer>
+</body>
+</html>

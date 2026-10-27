@@ -1,0 +1,1840 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": ""
+  },
+  "paths": {
+    "/api/v1/mints": {
+      "get": {
+        "operationId": "listMints",
+        "tags": [
+          "Mints"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "$ref": "#/components/parameters/FromDate"
+          },
+          {
+            "$ref": "#/components/parameters/ToDate"
+          },
+          {
+            "name": "partnerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "paid",
+                  "in_transit",
+                  "confirmed",
+                  "failed",
+                  "cancelled",
+                  "pending_compliance_review"
+                ]
+              }
+            },
+            "style": "form",
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMint",
+        "tags": [
+          "Mints"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyOptional"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "$ref": "#/components/responses/ApprovalGated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AttributionRequired"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mints/{mintId}": {
+      "get": {
+        "operationId": "getMintById",
+        "tags": [
+          "Mints"
+        ],
+        "parameters": [
+          {
+            "name": "mintId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/mints/{mintId}/cancel": {
+      "post": {
+        "operationId": "cancelMint",
+        "tags": [
+          "Mints"
+        ],
+        "parameters": [
+          {
+            "name": "mintId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mints/{mintId}/simulate-payin": {
+      "post": {
+        "operationId": "simulateMintPayin",
+        "tags": [
+          "Mints"
+        ],
+        "parameters": [
+          {
+            "name": "mintId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "message"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "mintId"
+                      ],
+                      "properties": {
+                        "mintId": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/redemptions": {
+      "get": {
+        "operationId": "listRedemptions",
+        "tags": [
+          "Redemptions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "$ref": "#/components/parameters/FromDate"
+          },
+          {
+            "$ref": "#/components/parameters/ToDate"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyOptional"
+          },
+          {
+            "name": "bankId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "pending_compliance_review",
+                  "complete",
+                  "paid",
+                  "failed",
+                  "payout_skipped",
+                  "cancelled",
+                  "returned"
+                ]
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "partnerId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedemptionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRedemption",
+        "tags": [
+          "Redemptions"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyOptional"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedemptionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedemptionResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "$ref": "#/components/responses/ApprovalGated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/AttributionRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/redemptions/quote": {
+      "post": {
+        "operationId": "quoteRedemption",
+        "tags": [
+          "Redemptions"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedemptionQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedemptionQuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/redemptions/{redemptionId}": {
+      "get": {
+        "operationId": "getRedemption",
+        "tags": [
+          "Redemptions"
+        ],
+        "parameters": [
+          {
+            "name": "redemptionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedemptionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/redemptions/{redemptionId}/burn-confirmation": {
+      "post": {
+        "operationId": "confirmRedemptionBurn",
+        "tags": [
+          "Redemptions"
+        ],
+        "parameters": [
+          {
+            "name": "redemptionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BurnConfirmationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BurnConfirmationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/redemptions/{redemptionId}/cancel": {
+      "post": {
+        "operationId": "cancelRedemption",
+        "tags": [
+          "Redemptions"
+        ],
+        "parameters": [
+          {
+            "name": "redemptionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedemptionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "FromDate": {
+        "name": "from",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "IdempotencyKeyOptional": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "PerPage": {
+        "name": "per_page",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 25
+        }
+      },
+      "ToDate": {
+        "name": "to",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "responses": {
+      "ApprovalGated": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "approval_request_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "AttributionRequired": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "headers": {
+          "X-Rate-Limit-Limit": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Remaining": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Reset": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "headers": {
+          "X-Rate-Limit-Limit": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Remaining": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Reset": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "headers": {
+          "X-Rate-Limit-Limit": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Remaining": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Reset": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "headers": {
+          "X-Rate-Limit-Limit": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Remaining": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Reset": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Retry-After": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RateLimitErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "headers": {
+          "X-Rate-Limit-Limit": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Remaining": {
+            "schema": {
+              "type": "integer"
+            }
+          },
+          "X-Rate-Limit-Reset": {
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Amount": {
+        "type": "object",
+        "required": [
+          "currency",
+          "value"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "minimum": 5,
+            "multipleOf": 0.01
+          }
+        }
+      },
+      "BurnConfirmationRequest": {
+        "type": "object",
+        "properties": {
+          "txHash": {
+            "type": "string"
+          }
+        }
+      },
+      "BurnConfirmationResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "data"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "redemptionId",
+              "burnTxHash",
+              "status",
+              "bankProviderCode"
+            ],
+            "properties": {
+              "redemptionId": {
+                "type": "string"
+              },
+              "burnTxHash": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "payout_initiated",
+                  "payout_skipped",
+                  "payout_withheld"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "bankProviderCode": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CancelRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "ChainId": {
+        "type": "string"
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "properties": {
+                  "field_errors": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "field",
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "constraint_violations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "constraint",
+                        "message"
+                      ],
+                      "properties": {
+                        "constraint": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "expected": {
+                          "type": "string"
+                        },
+                        "actual": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "request_id": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "retry_after": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "documentation_url": {
+                    "type": "string",
+                    "format": "uri",
+                    "nullable": true
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "Mint": {
+        "type": "object",
+        "required": [
+          "id",
+          "customerId",
+          "chain",
+          "address",
+          "tx_hash",
+          "amount",
+          "status",
+          "credited_at",
+          "created_at",
+          "updated_at",
+          "paymentType",
+          "relationshipToCustomer",
+          "nameOfPayer",
+          "bank_transfer_details"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "sourceBankAccountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "chain": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "tx_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "paid",
+              "in_transit",
+              "confirmed",
+              "failed",
+              "cancelled",
+              "pending_compliance_review"
+            ]
+          },
+          "cancelled_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "cancelled_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "confirmed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "credited_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "mintMode": {
+            "type": "string",
+            "enum": [
+              "one_time",
+              "recurring"
+            ]
+          },
+          "partnerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentType": {
+            "type": "string",
+            "enum": [
+              "first_party",
+              "third_party"
+            ]
+          },
+          "relationshipToCustomer": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "business_customer_supplier",
+              "family_friend_colleague",
+              "employer_employee",
+              "other",
+              null
+            ]
+          },
+          "nameOfPayer": {
+            "type": "string",
+            "nullable": true
+          },
+          "bank_transfer_details": {
+            "type": "object",
+            "nullable": true,
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MintBankTransferDetails"
+              },
+              {
+                "$ref": "#/components/schemas/PartnerMintBankTransferDetails"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MintBankTransferDetails": {
+        "type": "object",
+        "properties": {
+          "account_name": {
+            "type": "string"
+          },
+          "iban": {
+            "type": "string"
+          },
+          "bank_name": {
+            "type": "string"
+          },
+          "bank_address": {
+            "type": "string"
+          },
+          "swift_code": {
+            "type": "string"
+          },
+          "sort_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "account_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "transfer_type": {
+            "type": "string",
+            "enum": [
+              "faster_payments",
+              "sepa",
+              "sepa_instant"
+            ]
+          },
+          "vibanStatus": {
+            "type": "string",
+            "enum": [
+              "allocated",
+              "accepted",
+              "pending",
+              null
+            ],
+            "nullable": true
+          },
+          "vibanIban": {
+            "type": "string",
+            "nullable": true
+          },
+          "vibanBic": {
+            "type": "string",
+            "nullable": true
+          },
+          "vibanMessage": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MintCreateRequest": {
+        "type": "object",
+        "required": [
+          "destinationAddress",
+          "chain",
+          "amount"
+        ],
+        "properties": {
+          "customerId": {
+            "type": "string"
+          },
+          "sourceBankAccountId": {
+            "type": "string"
+          },
+          "destinationAddress": {
+            "type": "string"
+          },
+          "chain": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "paymentType": {
+            "type": "string",
+            "enum": [
+              "first_party",
+              "third_party"
+            ],
+            "default": "first_party"
+          },
+          "mintType": {
+            "type": "string",
+            "enum": [
+              "first_party",
+              "third_party",
+              "partner"
+            ],
+            "default": "first_party"
+          },
+          "partnerId": {
+            "type": "string"
+          },
+          "relationshipToCustomer": {
+            "type": "string",
+            "enum": [
+              "business_customer_supplier",
+              "family_friend_colleague",
+              "employer_employee",
+              "other"
+            ]
+          },
+          "nameOfPayer": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "IdempotencyKey": {
+            "type": "string",
+            "maxLength": 18
+          },
+          "mintMode": {
+            "type": "string",
+            "enum": [
+              "one_time",
+              "recurring"
+            ],
+            "default": "one_time"
+          }
+        }
+      },
+      "MintListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mint"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        }
+      },
+      "MintResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Mint"
+          }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "required": [
+          "page",
+          "per_page",
+          "total",
+          "has_next",
+          "has_prev"
+        ],
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_prev": {
+            "type": "boolean"
+          },
+          "next_page": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "prev_page": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "first_page": {
+            "type": "string",
+            "format": "uri"
+          },
+          "last_page": {
+            "type": "string",
+            "format": "uri"
+          },
+          "total_pages": {
+            "type": "integer"
+          }
+        }
+      },
+      "PartnerMintBankTransferDetails": {
+        "type": "object",
+        "properties": {
+          "payment_reference": {
+            "type": "string"
+          },
+          "sender_iban": {
+            "type": "string"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "matched_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "chainCodeReference": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentReference": {
+            "type": "string"
+          },
+          "senderIban": {
+            "type": "string"
+          }
+        }
+      },
+      "RateLimitErrorResponse": {
+        "type": "object",
+        "required": [
+          "error",
+          "rate_limit"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "rate_limit": {
+            "type": "object",
+            "required": [
+              "limit",
+              "remaining",
+              "reset",
+              "retry_after"
+            ],
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "remaining": {
+                "type": "integer"
+              },
+              "reset": {
+                "type": "integer"
+              },
+              "retry_after": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "Redemption": {
+        "type": "object",
+        "required": [
+          "redemptionId",
+          "chain",
+          "burnAddress",
+          "bankAccount",
+          "amount",
+          "fees",
+          "status",
+          "tx_hash",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "redemptionId": {
+            "type": "string"
+          },
+          "chain": {
+            "type": "string"
+          },
+          "burnAddress": {
+            "type": "string"
+          },
+          "bankAccount": {
+            "nullable": true,
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "name"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "amount": {
+            "type": "object",
+            "required": [
+              "amount",
+              "currency"
+            ],
+            "properties": {
+              "amount": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "GBP"
+                ]
+              }
+            }
+          },
+          "fees": {
+            "type": "object",
+            "required": [
+              "amount",
+              "currency"
+            ],
+            "properties": {
+              "amount": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "GBP"
+                ]
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "pending_compliance_review",
+              "complete",
+              "paid",
+              "failed",
+              "payout_skipped",
+              "cancelled",
+              "returned"
+            ]
+          },
+          "cancelled_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "cancelled_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "tx_hash": {
+            "type": "string",
+            "nullable": true
+          },
+          "transaction_data": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "evm": {
+                "type": "object",
+                "nullable": true,
+                "required": [
+                  "to",
+                  "value",
+                  "data",
+                  "gas_limit",
+                  "gas_price",
+                  "max_fee_per_gas",
+                  "max_priority_fee_per_gas"
+                ],
+                "properties": {
+                  "to": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "string"
+                  },
+                  "gas_limit": {
+                    "type": "string"
+                  },
+                  "gas_price": {
+                    "type": "string"
+                  },
+                  "max_fee_per_gas": {
+                    "type": "string"
+                  },
+                  "max_priority_fee_per_gas": {
+                    "type": "string"
+                  }
+                }
+              },
+              "solana": {
+                "type": "object",
+                "nullable": true,
+                "required": [
+                  "instructions",
+                  "recent_blockhash",
+                  "fee_payer"
+                ],
+                "properties": {
+                  "instructions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "program_id",
+                        "accounts",
+                        "data"
+                      ],
+                      "properties": {
+                        "program_id": {
+                          "type": "string"
+                        },
+                        "accounts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "pubkey",
+                              "is_signer",
+                              "is_writable"
+                            ],
+                            "properties": {
+                              "pubkey": {
+                                "type": "string"
+                              },
+                              "is_signer": {
+                                "type": "boolean"
+                              },
+                              "is_writable": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        },
+                        "data": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "recent_blockhash": {
+                    "type": "string"
+                  },
+                  "fee_payer": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "insufficient_funds",
+              "transaction_denied",
+              "transaction_failed",
+              "transaction_returned",
+              "bank_transaction_error",
+              "fiat_account_limit_exceeded",
+              "invalid_bank_account_number",
+              "unauthorized_sender",
+              "wrong_chain",
+              null
+            ]
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "return": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RedemptionCreateRequest": {
+        "type": "object",
+        "required": [
+          "chain",
+          "amount",
+          "bankId",
+          "IdempotencyKey"
+        ],
+        "properties": {
+          "chain": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "bankId": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "IdempotencyKey": {
+            "type": "string",
+            "maxLength": 18
+          }
+        }
+      },
+      "RedemptionListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Redemption"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        }
+      },
+      "RedemptionQuoteRequest": {
+        "type": "object",
+        "required": [
+          "chain",
+          "sourceAddress",
+          "amount"
+        ],
+        "properties": {
+          "chain": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "sourceAddress": {
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "RedemptionQuoteResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "verdict",
+              "riskScoreId",
+              "allowed"
+            ],
+            "properties": {
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "ofac",
+                  "unavailable"
+                ]
+              },
+              "riskScoreId": {
+                "type": "string"
+              },
+              "allowed": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "RedemptionResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Redemption"
+          }
+        }
+      }
+    }
+  }
+}

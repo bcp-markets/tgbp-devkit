@@ -1,0 +1,104 @@
+name: Publish Python
+
+# Publishing a GitHub release tagged python-v<version> publishes tgbp-kit to
+# PyPI with a provenance attestation. The npm package releases on v<version>
+# tags (publish.yml), so the two version independently. The repo carries
+# version 0.0.0; each job stamps the real version from the release tag. A tag
+# alone never publishes. PyPI trusted publishing (OIDC) authenticates the run;
+# there is no PyPI token. The trusted publisher on pypi.org names this repo,
+# this file (publish-python.yml) and the pypi environment.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the release
+    if: startsWith(github.event.release.tag_name, 'python-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, so the release commit can be checked against main.
+          fetch-depth: 0
+      - name: Check the release commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Stamp the version from the release tag
+        id: stamp
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(python python/scripts/stamp_version.py "$TAG")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # pip 25.1 or later reads dependency groups.
+      - run: python -m pip install --upgrade pip && pip install --group python/pyproject.toml:dev -e python
+      # A mistyped or older tag would otherwise publish behind PyPI's latest.
+      # Prereleases skip this check. Only a 404 (nothing published yet) skips it otherwise.
+      - name: Check the version is newer than PyPI's latest
+        env:
+          VERSION: ${{ steps.stamp.outputs.version }}
+        shell: python
+        run: |
+          import json, os, sys, urllib.error, urllib.request
+          from packaging.version import Version
+          version = Version(os.environ["VERSION"])
+          if version.is_prerelease:
+              sys.exit(0)
+          try:
+              with urllib.request.urlopen("https://pypi.org/pypi/tgbp-kit/json", timeout=30) as res:
+                  latest = Version(json.load(res)["info"]["version"])
+          except urllib.error.HTTPError as err:
+              if err.code == 404:
+                  sys.exit(0)
+              raise
+          if version <= latest:
+              print(f"::error::{version} is not newer than PyPI's latest ({latest})")
+              sys.exit(1)
+      - run: python python/scripts/generate_models.py --check
+      - run: ruff check python && ruff format --check python
+      # examples/ has no ruff config of its own, so it borrows the package's.
+      - run: ruff check --config python/pyproject.toml examples/python-quickstart && ruff format --check --config python/pyproject.toml examples/python-quickstart
+      - run: mypy --strict --config-file python/pyproject.toml python/ examples/python-quickstart/
+      - run: pytest python
+      # The parity check compares against the TypeScript client, so it needs Node.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: PYTHON=python pnpm check:python-parity
+
+  publish:
+    name: Publish to PyPI
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Stamp the version from the release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python python/scripts/stamp_version.py "$TAG"
+      - name: Build the sdist and wheel
+        run: pip install build==1.3.0 && python -m build python
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: python/dist

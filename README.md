@@ -3,7 +3,8 @@
 Developer kit for tGBP, the tokenised British pound. This repo publishes
 [`@bcptechnologies/tgbp-kit`](https://www.npmjs.com/package/@bcptechnologies/tgbp-kit): the tGBP token registry, helpers to
 read balances, send transfers and watch incoming transfers on EVM chains and Solana, and a typed
-client for the tGBP mint, redeem and swap API.
+client for the tGBP mint, redeem and swap API. The API client is also on PyPI for Python, as
+[`tgbp-kit`](#python).
 
 ```sh
 npm install @bcptechnologies/tgbp-kit viem                                  # EVM
@@ -162,6 +163,34 @@ the same key. It returns `'pending_approval'` when your account needs a second p
 the action. Nothing exists until then, so do not retry.
 
 Every request sends `User-Agent: tgbp-kit/<version>`. Browsers may drop that header.
+
+### Python
+
+[`tgbp-kit`](https://pypi.org/project/tgbp-kit/) on PyPI is the same API client for Python, in
+[`python/`](python). It covers every operation above, with snake_case names, and its models are
+generated from the same API spec. Amounts are `Decimal`, and a float raises `TypeError`.
+
+```sh
+pip install tgbp-kit
+```
+
+```python
+import os
+from decimal import Decimal
+
+from tgbp_kit import TgbpClient
+
+tgbp = TgbpClient(api_key=os.environ["TGBP_API_KEY"], environment="sandbox")
+mint = tgbp.mints.create({
+    "customerId": "customer_…",
+    "destinationAddress": "0x…",
+    "chain": "sepolia",
+    "amount": {"currency": "GBP", "value": Decimal("100.00")},
+})
+```
+
+See the [Python README](python/README.md) and the
+[Python quickstart](https://dev.tokenisedgbp.com/python).
 
 ## Agents: MCP server, skills and spend policy
 
@@ -393,8 +422,8 @@ RPC. `pnpm build:fixtures` recompiles the mock contract (it needs `forge`).
 
 ### Generated files
 
-`src/registry/tokens.generated.ts` and `src/api/*.generated.ts` are generated from private tGBP
-sources, so only the tGBP team can regenerate them. CI checks on `main` and daily that they still
+`src/registry/tokens.generated.ts`, `src/api/*.generated.ts` and `python/spec/*.json` are
+generated from private tGBP sources, so only the tGBP team can regenerate them. CI checks on `main` and daily that they still
 match their sources. It also checks that no signing, custody or banking provider name appears in
 this repo or in the published build.
 
@@ -409,7 +438,8 @@ environment.
 ## Developer site
 
 `site/` is <https://dev.tokenisedgbp.com>: static pages served by a Cloudflare Worker with no
-script, only assets. The quickstart page embeds the scripts in `examples/quickstart/` verbatim, and
+script, only assets. The quickstart pages embed the scripts in `examples/quickstart/` and
+`examples/python-quickstart/` verbatim, and
 `test/site.test.ts` fails when they drift apart or when a page is missing from `llms.txt`.
 
 ```sh

@@ -1,6 +1,7 @@
 name: Publish
 
 # Publishing a GitHub release tagged v<version> publishes @bcptechnologies/tgbp-kit to npm
+# (python-v<version> releases publish the Python package, in publish-python.yml)
 # with a provenance attestation. The repo carries version 0.0.0-tagged; each
 # job stamps the real version from the release tag. A tag alone never
 # publishes. npm trusted publishing (OIDC) authenticates
@@ -16,6 +17,7 @@ permissions:
 jobs:
   verify:
     name: Verify the release
+    if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

@@ -50,6 +50,43 @@ jobs:
       - name: Check package.json carries the 0.0.0-tagged placeholder
         run: test "$(node -p "require('./package.json').version")" = 0.0.0-tagged
 
+  python:
+    name: Python client
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # pip 25.1 or later reads dependency groups.
+      - run: python -m pip install --upgrade pip && pip install --group python/pyproject.toml:dev -e python
+      - name: Check the models match python/spec
+        run: python python/scripts/generate_models.py --check
+      - run: ruff check python && ruff format --check python
+      # examples/ has no ruff config of its own, so it borrows the package's.
+      - run: ruff check --config python/pyproject.toml examples/python-quickstart && ruff format --check --config python/pyproject.toml examples/python-quickstart
+      - run: mypy --strict --config-file python/pyproject.toml python/ examples/python-quickstart/
+      - run: pytest python
+      # Only the publish workflow stamps a real version, from the release tag.
+      - name: Check the package carries the 0.0.0 placeholder
+        run: test "$(python -c 'import tgbp_kit; print(tgbp_kit.__version__)')" = 0.0.0
+      # The parity check compares against the TypeScript client, so it needs Node.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the Python client covers the TypeScript client's operations
+        run: PYTHON=python pnpm check:python-parity
+
   registry-drift:
     name: Token registry matches tGBP
     # The tGBP contracts repo is private. Its name, the registry paths in it and
@@ -159,7 +196,7 @@ jobs:
           TGBP_VENDOR_GUARD: ${{ secrets.TGBP_VENDOR_GUARD }}
 
   sandbox:
-    name: Mint and redeem on sandbox.tgbp.io
+    name: Mint and redeem on sandbox.tgbp.io (TypeScript and Python)
     # The staging API key and the sandbox record ids are secrets in the sandbox
     # environment, which only main may use. Secrets keep the ids out of public logs.
     if: >-
@@ -186,4 +223,18 @@ jobs:
           TGBP_SANDBOX_CUSTOMER_ID: ${{ secrets.TGBP_SANDBOX_CUSTOMER_ID }}
           TGBP_SANDBOX_ADDRESS: ${{ secrets.TGBP_SANDBOX_ADDRESS }}
           TGBP_SANDBOX_BANK_ID: ${{ secrets.TGBP_SANDBOX_BANK_ID }}
+          TGBP_SANDBOX_CHAIN: ${{ secrets.TGBP_SANDBOX_CHAIN }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --upgrade pip && pip install --group python/pyproject.toml:dev -e python
+        if: ${{ !cancelled() }}
+      # --tb=line keeps tracebacks short; the test raises only redacted text.
+      - run: pytest python/tests/test_sandbox_live.py --tb=line
+        if: ${{ !cancelled() }}
+        env:
+          TGBP_REQUIRE_SANDBOX: '1'
+          TGBP_SANDBOX_API_KEY: ${{ secrets.TGBP_SANDBOX_API_KEY }}
+          TGBP_SANDBOX_CUSTOMER_ID: ${{ secrets.TGBP_SANDBOX_CUSTOMER_ID }}
+          TGBP_SANDBOX_ADDRESS: ${{ secrets.TGBP_SANDBOX_ADDRESS }}
           TGBP_SANDBOX_CHAIN: ${{ secrets.TGBP_SANDBOX_CHAIN }}

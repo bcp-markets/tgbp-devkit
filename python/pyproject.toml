@@ -1,0 +1,55 @@
+[build-system]
+# Pinned: the build runs in the release workflow.
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tgbp-kit"
+dynamic = ["version"]
+description = "tGBP, the tokenised British pound, for Python: typed clients for the tGBP mint, redeem and swap API."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.7,<3"]
+keywords = ["tgbp", "stablecoin", "gbp", "mint", "redeem", "swap"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+  "Topic :: Office/Business :: Financial",
+]
+
+[project.urls]
+Homepage = "https://dev.tokenisedgbp.com"
+Source = "https://github.com/bcp-markets/tgbp-devkit/tree/main/python"
+Issues = "https://github.com/bcp-markets/tgbp-devkit/issues"
+
+[dependency-groups]
+dev = ["mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.3"]
+
+[tool.hatch.version]
+path = "src/tgbp_kit/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tgbp_kit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/tgbp_kit", "tests", "README.md", "LICENSE"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["src/tgbp_kit/models.py", "src/tgbp_kit/swap_models.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "PL"]
+ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0917", "PLR2004"]

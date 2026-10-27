@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const SITE = join(import.meta.dirname, '../site/public')
 const EXAMPLES = join(import.meta.dirname, '../examples/quickstart')
+const PYTHON_EXAMPLES = join(import.meta.dirname, '../examples/python-quickstart')
 const ORIGIN = 'https://dev.tokenisedgbp.com'
 
 const read = (dir: string, file: string) => readFileSync(join(dir, file), 'utf8')
@@ -116,10 +117,13 @@ describe('developer site', () => {
     }
   })
 
-  it('shows each quickstart script exactly as it is in examples/', () => {
-    const page = read(SITE, 'quickstart.html')
-    for (const file of readdirSync(EXAMPLES).filter((file) => file.endsWith('.mjs'))) {
-      const escaped = read(EXAMPLES, file)
+  it.each([
+    ['quickstart.html', EXAMPLES, '.mjs'],
+    ['python.html', PYTHON_EXAMPLES, '.py'],
+  ])('shows each script on %s exactly as it is in examples/', (pageFile, dir, ext) => {
+    const page = read(SITE, pageFile)
+    for (const file of readdirSync(dir).filter((file) => file.endsWith(ext))) {
+      const escaped = read(dir, file)
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;')
