@@ -16,7 +16,7 @@ Start with the [quickstart](https://dev.tokenisedgbp.com/quickstart.md). It take
 | `@bcptechnologies/tgbp-kit/evm` | Balances, transfers and incoming-transfer watchers on EVM chains, built on viem. |
 | `@bcptechnologies/tgbp-kit/solana` | The same helpers on Solana, built on `@solana/kit`. |
 | `@bcptechnologies/tgbp-kit/api` | A typed client for the tGBP API's mint, redeem, swap and balance endpoints. It sends idempotency keys and retries only what is safe to repeat. Needs the API key you get at onboarding. |
-| `@bcptechnologies/tgbp-kit/agent`, `tgbp-mcp` | An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP, inside a spend policy you write. |
+| `@bcptechnologies/tgbp-kit/agent`, `tgbp-mcp` | An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP and pay x402 URLs, inside a spend policy you write. |
 | `@bcptechnologies/tgbp-kit/x402/server`, `/client` | Charge per HTTP request in tGBP, or pay such a request, with x402 on Base Sepolia. |
 
 The [README](https://github.com/bcp-markets/tgbp-devkit#readme) documents every helper and error code.
@@ -29,7 +29,7 @@ Business clients mint and redeem tGBP through the tGBP API. Its full reference i
 
 ## Agents
 
-`tgbp-mcp` is an MCP server that lets an LLM agent read balances and send, mint, redeem and swap tGBP. Every tool runs behind a spend policy, a JSON file that refuses any action it does not allow: by chain, destination, per-transfer cap and daily cap. A large redemption waits for a human to approve it. One agent skill per action ships with the package.
+`tgbp-mcp` is an MCP server that lets an LLM agent read balances and send, mint, redeem and swap tGBP, and pay x402 URLs in tGBP. Every tool runs behind a spend policy, a JSON file that refuses any action it does not allow: by chain, destination, per-transfer cap and daily cap. A large redemption waits for a human to approve it. One agent skill per action ships with the package.
 
 The policy runs inside the server's process. Give the agent the MCP server, never the API key or the wallet key. Setup and every policy field are in the [README](https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy).
 
