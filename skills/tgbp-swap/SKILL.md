@@ -12,7 +12,7 @@ deposit address must be in the policy's `destinations`.
 1. Call `tgbp_policy`. The recipient must be in `destinations`, the chain in `chains`, and the
    amount within `perTransferCap`.
 2. Call `tgbp_swap` with:
-   - `chain`: `base` or `sepolia`.
+   - `chain`: `sepolia` on testnet. For mainnet, see [Mainnet](#mainnet).
    - `direction`: `TGBP_TO_USDC` or `USDC_TO_TGBP`.
    - `amount`: the source amount, in tGBP or USDC.
    - `recipient`: the address the swapped tokens go to.
@@ -29,3 +29,8 @@ The caps are in pounds. A USDC amount counts as the same number of pounds, so 10
 An error with `code: "SPEND_POLICY_DENIED"` names the refusing rule in `details.rule`. Tell
 the user the rule and stop. Never split a swap into smaller ones to get under a cap, and never
 send to a different recipient to get round a refusal.
+
+## Mainnet
+
+On mainnet, swaps run on `base`. The server needs `TGBP_ENVIRONMENT=production`, and the policy's
+`chains` must list `base`. Swap on mainnet only when the user asks for it by name.
