@@ -18,6 +18,7 @@ import {
 
 import type { SpendGuard } from '../agent/guard.js'
 import { formatAmount } from '../amount.js'
+import { readCapped } from '../body.js'
 import { TgbpKitError } from '../errors.js'
 import { tgbpAbi } from '../evm/abi.js'
 import { assertCanTransfer } from '../evm/checks.js'
@@ -191,6 +192,8 @@ export function createTgbpPaymentFetch({
       }
     }
 
+    // A caller that gave up during the checks gets nothing signed and no ledger entry.
+    request.signal.throwIfAborted()
     // Last, so the ledger never records a payment that the checks above refused.
     await guard.authorize({
       action: 'x402',
@@ -208,7 +211,8 @@ export function createTgbpPaymentFetch({
       payTo,
       amount,
       network,
-      deadline: signedDeadline(payload),
+      // The window is the most the signature can live, so it bounds an unreadable deadline.
+      deadline: signedDeadline(payload) ?? Math.floor(Date.now() / 1000) + offer.maxTimeoutSeconds,
     }
 
     const paid = new Request(url, {
@@ -242,7 +246,7 @@ export function createTgbpPaymentFetch({
         cause = error
       }
       // A settlement the facilitator rejected comes back as a 402 carrying a failed PAYMENT-RESPONSE.
-      if (reason === undefined) {
+      if (typeof reason !== 'string') {
         try {
           reason = http.getPaymentSettleResponse((name) => response.headers.get(name)).errorReason
         } catch {
@@ -364,6 +368,7 @@ async function readTerms(
       (name) => first.headers.get(name),
       await readJson(first),
     )
+    if (!Array.isArray(paymentRequired?.accepts)) throw new TypeError('the terms list no offers')
   } catch (cause) {
     throw new TgbpKitError('PAYMENT_NOT_OFFERED', `${url} answered 402 without x402 terms`, {
       cause,
@@ -440,13 +445,21 @@ function minBigInt(a: bigint, b: bigint): bigint {
   return a < b ? a : b
 }
 
-/** Caps a server-supplied reason, which lands in logs and in an agent's context. */
-function clip(text: string | undefined): string | undefined {
-  return text === undefined || text.length <= 200 ? text : `${text.slice(0, 200)}…`
+/**
+ * Caps a server-supplied reason, which lands in logs and in an agent's context.
+ * The server's JSON is unvalidated, so anything but a string counts as no reason.
+ */
+function clip(text: unknown): string | undefined {
+  if (typeof text !== 'string') return undefined
+  return text.length <= 200 ? text : `${text.slice(0, 200)}…`
 }
 
+/** The terms travel in a header, so a body this size is plenty. */
+const MAX_TERMS_BODY_BYTES = 64 * 1024
+
 async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
+  const { text, truncated } = await readCapped(response, MAX_TERMS_BODY_BYTES)
+  if (truncated) return undefined
   try {
     return text ? JSON.parse(text) : undefined
   } catch {

@@ -634,4 +634,28 @@ describe('createTgbpPaymentFetch', () => {
       await bare.close()
     }
   })
+
+  it('throws PAYMENT_NOT_OFFERED when the terms list no offers', async () => {
+    const crafted = await serveTerms({ x402Version: 2, accepts: null })
+    try {
+      await expect(pay()(`${crafted.url}/quote`)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_OFFERED',
+      })
+    } finally {
+      await crafted.close()
+    }
+  })
+
+  it('throws PAYMENT_REFUSED with the deadline when a refusal gives a reason that is not a string', async () => {
+    const crafted = await serveTerms({ ...terms(), error: 123 })
+    try {
+      const error = await pay()(`${crafted.url}/quote`).catch((e: unknown) => e)
+      expect(error).toMatchObject({ code: 'PAYMENT_REFUSED', details: { reason: undefined } })
+      expect((error as { details: { deadline: unknown } }).details.deadline).toEqual(
+        expect.any(Number),
+      )
+    } finally {
+      await crafted.close()
+    }
+  })
 })

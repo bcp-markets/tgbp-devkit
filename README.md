@@ -292,7 +292,7 @@ after an ambiguous failure, retry with the key from the error to get the first r
 the URL and pays its x402 price in tGBP on Base Sepolia from the agent's wallet, through the
 [x402 client](#x402-payments-base-sepolia), then returns the service's status and the first 20 kB
 of its response with the settlement. A URL that does not ask for payment returns its status
-only, and a call that takes longer than 60 seconds fails. A price above `maxPence` is refused before
+only, and a call that takes longer than 45 seconds fails. A price above `maxPence` is refused before
 anything is signed. With `estimate: true` it returns the price and whether it fits `maxPence`,
 signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
 The policy must allow `x402` on `base-sepolia` and the payee. The tool needs
