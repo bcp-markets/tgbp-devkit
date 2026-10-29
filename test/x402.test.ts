@@ -692,8 +692,21 @@ describe('createTgbpPaymentFetch', () => {
 
   it('throws PAYMENT_REFUSED with the deadline when a refusal gives a reason that is not a string', async () => {
     const crafted = await serveTerms({ ...terms(), error: 123 })
+    // This test pays a second local server, so its policy lists that server instead.
+    const craftedGuard = createSpendGuard({
+      policy: {
+        ...policy(),
+        x402: {
+          services: [{ match: crafted.url, category: 'quotes' }],
+          categoryBudgets: { quotes: '0.15' },
+          paymentsPerMinute: 10,
+        },
+      },
+      ledgerPath,
+      approver: async () => true,
+    })
     try {
-      const error = await pay()(`${crafted.url}/quote`).catch((e: unknown) => e)
+      const error = await pay(10, craftedGuard)(`${crafted.url}/quote`).catch((e: unknown) => e)
       expect(error).toMatchObject({ code: 'PAYMENT_REFUSED', details: { reason: undefined } })
       expect((error as { details: { deadline: unknown } }).details.deadline).toEqual(
         expect.any(Number),

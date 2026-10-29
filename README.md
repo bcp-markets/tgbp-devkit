@@ -263,7 +263,8 @@ A "no", no answer before the timeout, and a client that cannot ask all refuse it
 approves. The threshold applies to each redemption; the daily cap bounds what several smaller
 ones can add up to.
 
-The first x402 payment to each service waits for a human too, through the guard's `approver`. Once
+The first x402 payment to each service waits for a human too: through the MCP client for
+`tgbp_x402_pay`, and through the guard's `approver` for the x402 client. Once
 the ledger records a payment to a service, its category budget and the per-minute limit decide
 alone. Without an approver, the first payment to every service is refused with
 `rule: 'firstPayment'` and a message that says `approval required`. The ledger marks the
@@ -314,7 +315,8 @@ of its response with the settlement. A URL that does not ask for payment returns
 only, and a call that takes longer than 45 seconds fails. A price above `maxPence` is refused before
 anything is signed. With `estimate: true` it returns the price and whether it fits `maxPence`,
 signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
-The policy must allow `x402` on `base-sepolia` and the payee. The tool needs
+The policy must allow `x402` on `base-sepolia`, the payee, and the URL's service in
+`x402.services`. The tool needs
 `TGBP_EVM_PRIVATE_KEY`, `TGBP_RPC_URL_BASE_SEPOLIA`, and the `@x402/core` and `@x402/evm`
 packages: add `"-p", "@x402/core@2", "-p", "@x402/evm@2"` to the `npx` arguments above. The other
 tools run without them. The server fetches whatever URL the agent names, from the machine it runs
