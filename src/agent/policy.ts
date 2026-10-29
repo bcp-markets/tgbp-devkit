@@ -53,9 +53,9 @@ export interface X402Rules {
 
 export interface X402Service {
   /**
-   * A host name, `api.example.com`, matches every URL on that host. An
-   * endpoint, `https://api.example.com/v1/quotes`, matches that origin and
-   * that path or any path below it. Where several match, an endpoint beats a
+   * A host name, `api.example.com`, matches every https URL on that host's
+   * default port. An endpoint, `https://api.example.com/v1/quotes`, matches
+   * that origin and that path or any path below it. Where several match, an endpoint beats a
    * host and the longest path wins.
    */
   match: string
@@ -87,7 +87,7 @@ export function parseSpendPolicy(input: unknown): SpendPolicy {
   if (!isRecord(input)) throw invalid('the policy must be a JSON object')
   const raw = input
   for (const key of Object.keys(raw)) {
-    if (![...FIELDS, ...OPTIONAL_FIELDS].includes(key as never)) {
+    if (!([...FIELDS, ...OPTIONAL_FIELDS] as readonly string[]).includes(key)) {
       throw invalid(`unknown field "${key}"`)
     }
   }
@@ -115,7 +115,7 @@ export function parseSpendPolicy(input: unknown): SpendPolicy {
     dailyCap: amountField(raw, 'dailyCap'),
     redemptionApprovalAbove: amountField(raw, 'redemptionApprovalAbove'),
   }
-  if (raw.x402 !== undefined) policy.x402 = x402Rules(raw.x402)
+  if (raw.x402 !== undefined) policy.x402 = parseX402Rules(raw.x402)
   else if (policy.actions.includes('x402')) {
     throw invalid('a policy that allows "x402" needs "x402" rules')
   }
@@ -152,7 +152,7 @@ export function sameDestination(a: string, b: string): boolean {
 
 /** The service `url` pays: the most specific match, or undefined when none matches. */
 export function matchService(services: X402Service[], url: string): X402Service | undefined {
-  const { hostname, origin, pathname } = new URL(url)
+  const { hostname, origin, pathname, port, protocol } = new URL(url)
   let best: X402Service | undefined
   let bestRank = -1
   for (const service of services) {
@@ -160,7 +160,7 @@ export function matchService(services: X402Service[], url: string): X402Service 
     // A host ranks 0; an endpoint ranks above every host, and a longer path above a shorter.
     const rank =
       'host' in match
-        ? match.host === hostname
+        ? match.host === hostname && protocol === 'https:' && port === ''
           ? 0
           : -1
         : match.origin === origin && underPath(pathname, match.path)
@@ -208,7 +208,11 @@ function underPath(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`)
 }
 
-function x402Rules(value: unknown): X402Rules {
+/**
+ * Validate the `x402` block of a policy. `createSpendGuard` runs it too, so a
+ * policy built in code gets the same checks as a policy file.
+ */
+export function parseX402Rules(value: unknown): X402Rules {
   if (!isRecord(value)) throw invalid('"x402" must be an object')
   for (const key of Object.keys(value)) {
     if (!(X402_FIELDS as readonly string[]).includes(key)) {
@@ -231,9 +235,10 @@ function x402Rules(value: unknown): X402Rules {
     ) {
       throw invalid('each "x402.services" entry must be { "match": "…", "category": "…" }')
     }
-    parseMatch(service.match)
-    if (seen.has(service.match)) throw invalid(`x402 service "${service.match}" is listed twice`)
-    seen.add(service.match)
+    // Compare parsed forms, so `API.example.com` and `api.example.com` are one service.
+    const key = JSON.stringify(parseMatch(service.match))
+    if (seen.has(key)) throw invalid(`x402 service "${service.match}" is listed twice`)
+    seen.add(key)
     return { match: service.match, category: service.category }
   })
   if (!isRecord(categoryBudgets)) throw invalid('"x402.categoryBudgets" must be an object')
@@ -249,14 +254,14 @@ function x402Rules(value: unknown): X402Rules {
       throw invalid(`x402 service "${match}" spends from "${category}", which has no budget`)
     }
   }
-  if (!Number.isSafeInteger(paymentsPerMinute) || (paymentsPerMinute as number) < 1) {
+  if (
+    typeof paymentsPerMinute !== 'number' ||
+    !Number.isSafeInteger(paymentsPerMinute) ||
+    paymentsPerMinute < 1
+  ) {
     throw invalid('"x402.paymentsPerMinute" must be a whole number of at least 1')
   }
-  return {
-    services: parsed,
-    categoryBudgets: budgets,
-    paymentsPerMinute: paymentsPerMinute as number,
-  }
+  return { services: parsed, categoryBudgets: budgets, paymentsPerMinute }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

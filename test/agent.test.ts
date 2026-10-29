@@ -156,6 +156,20 @@ describe('parseSpendPolicy', () => {
       'which has no budget',
     ],
     [
+      'one service listed twice in different forms',
+      {
+        ...POLICY,
+        x402: {
+          ...POLICY.x402,
+          services: [
+            { match: 'API.example.com', category: 'data' },
+            { match: 'api.example.com', category: 'search' },
+          ],
+        },
+      },
+      'listed twice',
+    ],
+    [
       'zero payments a minute',
       { ...POLICY, x402: { ...POLICY.x402, paymentsPerMinute: 0 } },
       '"x402.paymentsPerMinute" must be',
@@ -266,6 +280,7 @@ describe('createSpendGuard', () => {
       reason: 'a weather report',
       service: 'api.example.com',
       category: 'data',
+      firstPayment: true,
     })
   })
 
@@ -305,6 +320,21 @@ describe('x402 services', () => {
       expect(await refusal(g.authorize(x402('0.05', 'a quote', url)))).toBe('services')
     }
     await expect(readFile(ledgerPath)).rejects.toThrow()
+  })
+
+  it('matches a host rule only over https on the default port', async () => {
+    const g = guard({ approver: yes })
+    for (const url of ['http://api.example.com/weather', 'https://api.example.com:8443/weather']) {
+      expect(await refusal(g.authorize(x402('0.05', 'a quote', url)))).toBe('services')
+    }
+    await g.authorize(x402('0.05', 'a quote', 'https://API.example.com:443/weather'))
+  })
+
+  it('refuses a policy built in code with rules the parser would reject', () => {
+    const x402 = { ...POLICY.x402, paymentsPerMinute: Number.NaN }
+    expect(() => guard({ policy: { ...POLICY, x402 } as SpendPolicy })).toThrow(
+      '"x402.paymentsPerMinute" must be',
+    )
   })
 
   it('pays a listed endpoint and the paths below it', async () => {
@@ -353,6 +383,18 @@ describe('x402 services', () => {
     })
     // The search budget is spent; the data budget still pays.
     await g.authorize(x402('5'))
+    // Moving the search service into another category moves its spend with it.
+    const moved: SpendPolicy = {
+      ...POLICY,
+      x402: {
+        services: [{ match: 'https://search.example.com/v1', category: 'lookups' }],
+        categoryBudgets: { lookups: '1' },
+        paymentsPerMinute: 10,
+      },
+    }
+    expect(await refusal(guard({ policy: moved }).authorize(search('0.01')))).toBe(
+      'categoryBudgets',
+    )
     // A rolling window: not the next UTC day, but 24 hours after the spend.
     const nextDay = guard({ now: at(13 * 60 * 60_000) })
     expect(await refusal(nextDay.authorize(search('0.01')))).toBe('categoryBudgets')
@@ -377,6 +419,8 @@ describe('x402 services', () => {
 
     answer = true
     await g.authorize(x402('0.05'))
+    const [approved] = (await readFile(ledgerPath, 'utf8')).trim().split('\n')
+    expect(JSON.parse(approved ?? '')).toMatchObject({ firstPayment: true })
     expect(asked).toEqual([
       expect.objectContaining({ action: 'x402', service: 'api.example.com', category: 'data' }),
       expect.objectContaining({

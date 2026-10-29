@@ -159,7 +159,8 @@ describe('createTgbpPaymentFetch', () => {
     dailyCap: '0.15',
     redemptionApprovalAbove: '0',
     x402: {
-      services: [{ match: '127.0.0.1', category: 'quotes' }],
+      // The test server is plain http on a random port, so it is listed as an endpoint.
+      services: [{ match: server.url, category: 'quotes' }],
       categoryBudgets: { quotes: '0.15' },
       paymentsPerMinute: 10,
     },

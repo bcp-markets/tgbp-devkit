@@ -238,7 +238,7 @@ the same number of pounds.
 | `perTransferCap` | One transfer, mint, redemption, swap or x402 payment above this amount. |
 | `dailyCap` | An action that would take the UTC day's total above this amount. |
 | `redemptionApprovalAbove` | A redemption above this amount, unless a human approves it. |
-| `x402.services` | An x402 payment to a URL no service matches. A host name (`api.example.com`) matches every URL on that host, and no other host or subdomain. An endpoint URL matches that scheme, host and port, at that path or below it. Where several match, an endpoint beats a host and the longest path wins. |
+| `x402.services` | An x402 payment to a URL no service matches. A host name (`api.example.com`) matches every https URL on that host's default port, and no other host, port or subdomain. An endpoint URL matches that scheme, host and port, at that path or below it. Where several match, an endpoint beats a host and the longest path wins. |
 | `x402.categoryBudgets` | An x402 payment that would take its service's category over its budget in any rolling 24 hours. Every service's category needs a budget. |
 | `x402.paymentsPerMinute` | An x402 payment after this many in any rolling minute, whatever the service. |
 | (`firstPayment`) | The first x402 payment to a service, unless a human approves it. |
@@ -266,7 +266,8 @@ ones can add up to.
 The first x402 payment to each service waits for a human too, through the guard's `approver`. Once
 the ledger records a payment to a service, its category budget and the per-minute limit decide
 alone. Without an approver, the first payment to every service is refused with
-`rule: 'firstPayment'` and a message that starts `approval required`.
+`rule: 'firstPayment'` and a message that says `approval required`. The ledger marks the
+approved payment `"firstPayment": true`.
 
 ### Running the server
 

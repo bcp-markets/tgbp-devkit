@@ -12,6 +12,7 @@ import { type LedgerEntry, type ReserveResult, SpendLedger, sumDay, utcDay } fro
 import {
   matchService,
   POLICY_DECIMALS,
+  parseX402Rules,
   type SpendAction,
   type SpendPolicy,
   sameDestination,
@@ -145,12 +146,15 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
   const perTransferCap = toPolicyUnits(policy.perTransferCap)
   const dailyCap = toPolicyUnits(policy.dailyCap)
   const approvalAbove = toPolicyUnits(policy.redemptionApprovalAbove)
+  // Checked here as well as in parseSpendPolicy: a policy built in code skips the parser.
+  const x402 = policy.x402 === undefined ? undefined : parseX402Rules(policy.x402)
   const categoryBudgets = new Map(
-    Object.entries(policy.x402?.categoryBudgets ?? {}).map(([category, pounds]) => [
+    Object.entries(x402?.categoryBudgets ?? {}).map(([category, pounds]) => [
       category,
       toPolicyUnits(pounds),
     ]),
   )
+  const categoryOf = new Map(x402?.services.map(({ match, category }) => [match, category]))
 
   function checkExpiry(request: SpendRequest): void {
     if (now().getTime() >= expiresAt) {
@@ -166,17 +170,17 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     }
   }
 
-  /** The cap or budget `amount` would break, given what `entries` already spent. */
+  /** The cap or budget `amount` would break at time `at`, given what `entries` already spent. */
   function overLimit(
     request: SpendRequest,
     amount: bigint,
     service: X402Service | undefined,
     entries: LedgerEntry[],
+    at: Date,
   ): TgbpKitError | undefined {
-    const at = now()
     const spent = sumDay(entries, utcDay(at))
     if (spent + amount > dailyCap) return dailyCapDenied(request, spent)
-    if (service === undefined) return undefined
+    if (service === undefined || x402 === undefined) return undefined
 
     const budget = categoryBudgets.get(service.category)
     if (budget === undefined) {
@@ -186,7 +190,12 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     const x402Since = (ms: number) =>
       entries.filter((entry) => entry.action === 'x402' && Date.parse(entry.at) > at.getTime() - ms)
     const categorySpent = x402Since(DAY_MS)
-      .filter((entry) => entry.category === service.category)
+      // Its recorded category, or its service's category now, so moving a service keeps its spend.
+      .filter(
+        (entry) =>
+          entry.category === service.category ||
+          (entry.service !== undefined && categoryOf.get(entry.service) === service.category),
+      )
       .reduce((total, entry) => total + toPolicyUnits(entry.amount), 0n)
     if (categorySpent + amount > budget) {
       const spentText = formatAmount(categorySpent, POLICY_DECIMALS)
@@ -197,11 +206,10 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
         { category: service.category, spentInCategory: spentText },
       )
     }
-    const limit = policy.x402?.paymentsPerMinute ?? 0
-    if (x402Since(MINUTE_MS).length >= limit) {
+    if (x402Since(MINUTE_MS).length >= x402.paymentsPerMinute) {
       return denied(
         'paymentsPerMinute',
-        `the spend policy allows ${limit} x402 payments a minute`,
+        `the spend policy allows ${x402.paymentsPerMinute} x402 payments a minute`,
         request,
       )
     }
@@ -232,7 +240,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     }
     let service: X402Service | undefined
     if (request.action === 'x402') {
-      service = policy.x402 && matchService(policy.x402.services, request.url)
+      service = x402 && matchService(x402.services, request.url)
       if (service === undefined) {
         throw denied('services', `${request.url} is not an approved x402 service`, request)
       }
@@ -248,7 +256,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     }
     // Check the caps before asking a human, so nobody approves an action that would fail.
     const entries = await readLedger(request)
-    const limited = overLimit(request, amount, service, entries)
+    const limited = overLimit(request, amount, service, entries, now())
     if (limited) throw limited
 
     if (request.action === 'redeem' && amount > approvalAbove) {
@@ -272,6 +280,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     }
 
     // A service the ledger has paid before was approved then; the budgets decide from here.
+    let firstPayment = false
     if (
       request.action === 'x402' &&
       service !== undefined &&
@@ -296,6 +305,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
         )
       }
       checkExpiry(request)
+      firstPayment = true
     }
 
     const at = now()
@@ -312,15 +322,20 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
             pence: formatAmount(amount, POLICY_DECIMALS - 2),
             reason: request.reason,
             ...(service ? { service: service.match, category: service.category } : {}),
+            ...(firstPayment ? { firstPayment: true as const } : {}),
           }
         : {}),
     }
     let result: ReserveResult<TgbpKitError>
     try {
       // Again under the ledger lock: another process may have spent since the check above.
-      result = await ledger.reserve(entry, (recorded) =>
-        overLimit(request, amount, service, recorded),
-      )
+      result = await ledger.reserve(entry, (recorded) => {
+        // Stamp the entry with the time it is checked at, after any wait for the lock.
+        const checkedAt = now()
+        entry.at = checkedAt.toISOString()
+        entry.day = utcDay(checkedAt)
+        return overLimit(request, amount, service, recorded, checkedAt)
+      })
     } catch (error) {
       throw ledgerDenied(ledger.path, request, error)
     }
@@ -403,7 +418,7 @@ function denied(
     'SPEND_POLICY_DENIED',
     `Spend policy refused ${request.action}: ${reason}`,
     {
-      details: { rule, ...request, ...extra },
+      details: { ...request, ...extra, rule },
     },
   )
 }
@@ -414,7 +429,7 @@ function ledgerDenied(path: string, request: SpendRequest, cause: unknown): Tgbp
     `Spend policy refused ${request.action}: the spend ledger ${path} cannot be read or written, so the daily cap cannot be checked`,
     {
       cause,
-      details: { rule: 'ledger', ...request, ledgerPath: path, ledgerError: errorMessage(cause) },
+      details: { ...request, rule: 'ledger', ledgerPath: path, ledgerError: errorMessage(cause) },
     },
   )
 }

@@ -30,6 +30,8 @@ export interface LedgerEntry {
   service?: string
   /** x402 payments only: the budget the payment spent from. */
   category?: string
+  /** x402 payments only: set on the first payment to a service, which its owner approved. */
+  firstPayment?: true
 }
 
 export type ReserveResult<R> = { ok: true } | { ok: false; refusal: R }
