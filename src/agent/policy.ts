@@ -208,11 +208,7 @@ function underPath(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`)
 }
 
-/**
- * Validate the `x402` block of a policy. `createSpendGuard` runs it too, so a
- * policy built in code gets the same checks as a policy file.
- */
-export function parseX402Rules(value: unknown): X402Rules {
+function parseX402Rules(value: unknown): X402Rules {
   if (!isRecord(value)) throw invalid('"x402" must be an object')
   for (const key of Object.keys(value)) {
     if (!(X402_FIELDS as readonly string[]).includes(key)) {

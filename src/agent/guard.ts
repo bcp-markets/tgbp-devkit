@@ -12,7 +12,7 @@ import { type LedgerEntry, type ReserveResult, SpendLedger, sumDay, utcDay } fro
 import {
   matchService,
   POLICY_DECIMALS,
-  parseX402Rules,
+  parseSpendPolicy,
   type SpendAction,
   type SpendPolicy,
   sameDestination,
@@ -138,7 +138,9 @@ const MINUTE_MS = 60_000
 const DAY_MS = 24 * 60 * MINUTE_MS
 
 export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
-  const { policy } = options
+  // Validated here as well as when loaded: a policy built in code skips the file loader, and a
+  // malformed expiry or cap must refuse, never pass.
+  const policy = parseSpendPolicy(options.policy)
   const ledger = new SpendLedger(options.ledgerPath, options.ledgerLockWaitMs)
   const now = options.now ?? (() => new Date())
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
@@ -146,8 +148,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
   const perTransferCap = toPolicyUnits(policy.perTransferCap)
   const dailyCap = toPolicyUnits(policy.dailyCap)
   const approvalAbove = toPolicyUnits(policy.redemptionApprovalAbove)
-  // Checked here as well as in parseSpendPolicy: a policy built in code skips the parser.
-  const x402 = policy.x402 === undefined ? undefined : parseX402Rules(policy.x402)
+  const { x402 } = policy
   const categoryBudgets = new Map(
     Object.entries(x402?.categoryBudgets ?? {}).map(([category, pounds]) => [
       category,

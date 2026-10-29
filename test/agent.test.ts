@@ -251,7 +251,7 @@ describe('createSpendGuard', () => {
   it('refuses when the ledger holds a corrupt line, rather than counting it as zero', async () => {
     await writeFile(
       ledgerPath,
-      `{"at":"${NOW.toISOString()}","day":"2026-10-21","amount":"lots"}\n`,
+      `{"at":"${NOW.toISOString()}","day":"2026-10-21","action":"transfer","amount":"lots"}\n`,
     )
     expect(await refusal(guard().authorize(transfer('1')))).toBe('ledger')
   })
@@ -365,9 +365,14 @@ describe('x402 services', () => {
     })
   })
 
-  it('refuses x402 outright under a policy object with no x402 rules', async () => {
-    const policy = { ...POLICY, x402: undefined }
-    expect(await refusal(guard({ policy, approver: yes }).authorize(x402('0.05')))).toBe('services')
+  it('refuses to build a guard from a policy object the parser would reject', () => {
+    expect(() => guard({ policy: { ...POLICY, x402: undefined } })).toThrow(
+      'a policy that allows "x402" needs "x402" rules',
+    )
+    expect(() => guard({ policy: { ...POLICY, expiresAt: 'never' } })).toThrow('"expiresAt"')
+    expect(() =>
+      guard({ policy: { ...POLICY, chains: 'sepolia' } as unknown as SpendPolicy }),
+    ).toThrow('"chains"')
   })
 
   it('gives each category its own rolling 24-hour budget', async () => {
@@ -491,6 +496,15 @@ describe('x402 services', () => {
     await writeFile(
       ledgerPath,
       '{"at":"soon","day":"2026-10-21","amount":"0.01","action":"x402"}\n',
+    )
+    expect(await refusal(guard({ approver: yes }).authorize(x402('0.01')))).toBe('ledger')
+  })
+
+  it('refuses when a ledger entry has an unknown action, rather than leaving it out of a window', async () => {
+    const at = NOW.toISOString()
+    await writeFile(
+      ledgerPath,
+      `{"at":"${at}","day":"2026-10-21","amount":"0.01","action":"x403"}\n`,
     )
     expect(await refusal(guard({ approver: yes }).authorize(x402('0.01')))).toBe('ledger')
   })

@@ -8,7 +8,7 @@
 import { open, readFile, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { type SpendAction, toPolicyUnits } from './policy.js'
+import { SPEND_ACTIONS, type SpendAction, toPolicyUnits } from './policy.js'
 
 export interface LedgerEntry {
   /** ISO time the action was recorded. */
@@ -160,8 +160,12 @@ function parseEntry(line: string, lineNumber: number, path: string): LedgerEntry
   } catch (error) {
     throw new Error(`${path}:${lineNumber} is not valid JSON`, { cause: error })
   }
-  const { at, day, amount } = (entry ?? {}) as Partial<LedgerEntry>
+  const { at, day, amount, action, service, category } = (entry ?? {}) as Partial<LedgerEntry>
   if (
+    // An unknown action, service or category would drop out of the x402 windows.
+    !(SPEND_ACTIONS as readonly unknown[]).includes(action) ||
+    (service !== undefined && typeof service !== 'string') ||
+    (category !== undefined && typeof category !== 'string') ||
     typeof at !== 'string' ||
     // A time that does not parse would drop out of every rolling window.
     Number.isNaN(Date.parse(at)) ||
