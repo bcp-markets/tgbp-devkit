@@ -88,7 +88,10 @@ export interface SpendBudget {
   dailyCap: string
   /** What the ledger records as spent today. */
   spent: string
-  /** What the agent may still spend today: `0` once the policy has expired. */
+  /**
+   * What is left under the daily cap today: `0` once the policy has expired.
+   * The other rules can still refuse an action within it.
+   */
   remaining: string
 }
 
@@ -96,11 +99,13 @@ export interface SpendGuard {
   readonly policy: SpendPolicy
   /** Resolves once the action is allowed and recorded; throws `SPEND_POLICY_DENIED` otherwise. */
   authorize(request: SpendRequest): Promise<void>
-  /** Today's spend against the daily cap. Throws if the ledger cannot be read. */
+  /** Today's spend against the daily cap. Throws `SPEND_POLICY_DENIED` if the ledger cannot be read. */
   budget(): Promise<SpendBudget>
 }
 
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000
+/** The longest x402 `reason` the ledger accepts, in characters. */
+export const MAX_REASON_LENGTH = 500
 
 export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
   const { policy } = options
@@ -139,9 +144,11 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     const { destination } = request
     if (
       request.action === 'x402' &&
-      (typeof request.reason !== 'string' || request.reason.trim() === '')
+      (typeof request.reason !== 'string' ||
+        request.reason.trim() === '' ||
+        request.reason.length > MAX_REASON_LENGTH)
     ) {
-      throw new RangeError('an x402 payment needs a reason')
+      throw new RangeError(`an x402 payment needs a reason of 1 to ${MAX_REASON_LENGTH} characters`)
     }
     if (!policy.destinations.some((allowed) => sameDestination(allowed, destination))) {
       throw denied('destinations', `"${destination}" is not an allowed destination`, request)
@@ -249,7 +256,14 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     try {
       spent = await ledger.spentOn(day)
     } catch (error) {
-      throw new Error(`Cannot read the spend ledger ${ledger.path}`, { cause: error })
+      throw new TgbpKitError(
+        'SPEND_POLICY_DENIED',
+        `The spend ledger ${ledger.path} cannot be read, so today's budget is unknown`,
+        {
+          cause: error,
+          details: { rule: 'ledger', ledgerPath: ledger.path, ledgerError: errorMessage(error) },
+        },
+      )
     }
     const left = at.getTime() >= expiresAt || spent >= dailyCap ? 0n : dailyCap - spent
     return {
@@ -284,7 +298,7 @@ function ledgerDenied(path: string, request: SpendRequest, cause: unknown): Tgbp
     `Spend policy refused ${request.action}: the spend ledger ${path} cannot be read or written, so the daily cap cannot be checked`,
     {
       cause,
-      details: { rule: 'ledger', ...request, ledgerPath: path, reason: errorMessage(cause) },
+      details: { rule: 'ledger', ...request, ledgerPath: path, ledgerError: errorMessage(cause) },
     },
   )
 }

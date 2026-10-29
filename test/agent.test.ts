@@ -197,8 +197,9 @@ describe('createSpendGuard', () => {
     expect(await refusal(guard().authorize(x402('0.02')))).toBe('dailyCap')
   })
 
-  it('refuses an x402 payment that gives no reason, and records nothing', async () => {
+  it('refuses an x402 payment with no reason, or one too long to record', async () => {
     await expect(guard().authorize(x402('0.05', ' '))).rejects.toThrow(RangeError)
+    await expect(guard().authorize(x402('0.05', 'x'.repeat(501)))).rejects.toThrow(RangeError)
     await expect(readFile(ledgerPath)).rejects.toThrow()
   })
 
@@ -227,9 +228,9 @@ describe('budget', () => {
     await expect(g.budget()).resolves.toMatchObject({ remaining: '0' })
   })
 
-  it('throws when the ledger cannot be read', async () => {
+  it('throws SPEND_POLICY_DENIED when the ledger cannot be read', async () => {
     await mkdir(ledgerPath)
-    await expect(guard().budget()).rejects.toThrow(ledgerPath)
+    expect(await refusal(guard().budget())).toBe('ledger')
   })
 })
 

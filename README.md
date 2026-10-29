@@ -233,9 +233,11 @@ the same number of pounds.
 A refused action returns `SPEND_POLICY_DENIED` with the rule, before anything is signed or sent.
 
 **Daily spend ledger.** The kit records every allowed transfer, mint, redemption, swap and x402
-payment in an append-only JSON Lines file, before it signs or sends. An x402 entry also records the
-URL, the price in pence and the agent's reason. `guard.budget()` reads the day's spend and what is
-left under the daily cap. An action that then fails stays counted, so
+payment in an append-only JSON Lines file, before it signs or sends. Each entry records the time, the
+action, the chain, the destination and the amount. An x402 entry also records the URL, without its
+credentials or query string, the price in pence and the agent's reason. `guard.budget()` reads the
+day's spend and what is left under the daily cap. The other rules can still refuse an action within
+it. An action that then fails stays counted, so
 the ledger may overstate the day's spend but never understate it. If the ledger cannot be read or
 written, every value-moving action is refused with `rule: 'ledger'`. A lock file stops two
 processes that share a ledger from both spending the last of the cap. The kit never breaks a lock
@@ -352,8 +354,10 @@ console.log(await guard.budget()) // { day, dailyCap, spent, remaining }, in pou
 Every payment runs through the [spend policy](#agents-mcp-server-skills-and-spend-policy) before
 it is signed. The policy must allow the `x402` action, the chain and the payee, and the price
 counts against `perTransferCap` and the same `dailyCap` as the agent's transfers, mints,
-redemptions and swaps. Each payment needs a `reason`, which goes into the spend ledger with the
-URL, the price in pence and the payee. A refusal throws `SPEND_POLICY_DENIED` and signs nothing.
+redemptions and swaps. Each call needs a `reason` of at most 500 characters, which goes into the
+spend ledger with the URL, the price in pence and the payee. Without one, the call throws
+`RangeError` before it sends any request. A refusal throws `SPEND_POLICY_DENIED` and signs nothing,
+and so does a ledger that cannot be read or written (`rule: 'ledger'`).
 
 tGBP supports EIP-2612 `permit` but not EIP-3009, so payments use the x402 exact scheme's
 Permit2 method. The route also offers the `eip2612GasSponsoring` extension. With it, the payer

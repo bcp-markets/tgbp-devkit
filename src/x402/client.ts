@@ -50,7 +50,10 @@ export interface TgbpPaymentFetchOptions {
 }
 
 export interface TgbpPaymentContext {
-  /** Why the agent is paying. The spend ledger records it; a paid route refuses without one. */
+  /**
+   * Why the agent is paying, at most `MAX_REASON_LENGTH` characters. The spend
+   * ledger records it. Every call needs one.
+   */
   reason: string
 }
 
@@ -81,8 +84,10 @@ export interface TgbpPaidResponse {
  *
  * Last before signing, it asks `guard`, which refuses with
  * `SPEND_POLICY_DENIED` or records the payment in the spend ledger with its
- * URL, price, payee and `payment.reason`. A payment that then fails stays
- * counted, so the ledger may overstate the day's spend but never understate it.
+ * URL (without credentials or query), price, payee and `payment.reason`. A
+ * call with no reason throws `RangeError` before any request. A payment that
+ * then fails stays counted, so the ledger may overstate the day's spend but
+ * never understate it.
  *
  * After signing, any outcome other than a reported settlement throws
  * `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`. Neither proves the payment did
@@ -102,11 +107,14 @@ export function createTgbpPaymentFetch({
   fetch: fetchFn = globalThis.fetch,
 }: TgbpPaymentFetchOptions): (
   input: string | URL | Request,
-  init?: RequestInit,
-  payment?: TgbpPaymentContext,
+  init: RequestInit | undefined,
+  payment: TgbpPaymentContext,
 ) => Promise<TgbpPaidResponse> {
   const account = walletClient.account
   if (!account) throw new Error('walletClient has no account; create it with `account`')
+  if (typeof guard?.authorize !== 'function') {
+    throw new Error('Pass a spend guard: `guard: createSpendGuard({ policy, ledgerPath })`')
+  }
   const payer = account.address
   const network = x402Network(token)
   const limit = penceToBaseUnits(maxPencePerRequest, token)
@@ -128,8 +136,12 @@ export function createTgbpPaymentFetch({
   async function pay(
     input: string | URL | Request,
     init: RequestInit | undefined,
-    payment: TgbpPaymentContext | undefined,
+    payment: TgbpPaymentContext,
   ): Promise<TgbpPaidResponse> {
+    // Before any request, so a forgotten reason never costs a round trip.
+    if (typeof payment?.reason !== 'string' || payment.reason.trim() === '') {
+      throw new RangeError('Pass { reason } as the third argument; the spend ledger records it')
+    }
     const request = new Request(input, init)
     const first = await fetchFn(request.clone())
     if (first.status !== 402) return { response: first }
@@ -188,8 +200,8 @@ export function createTgbpPaymentFetch({
       chain: token.chain,
       destination: payTo,
       amount: formatAmount(amount, token.decimals),
-      url,
-      reason: payment?.reason ?? '',
+      url: ledgerUrl(url),
+      reason: payment.reason,
     })
 
     const payload = await http.createPaymentPayload({ ...paymentRequired, accepts: [offer] })
@@ -323,6 +335,12 @@ function pickTgbpOffer(
     )
   }
   return offer
+}
+
+/** The URL as the ledger records it: credentials, query and fragment may carry secrets. */
+function ledgerUrl(url: string): string {
+  const { origin, pathname } = new URL(url)
+  return `${origin}${pathname}`
 }
 
 /** The Unix time (seconds) after which the signed Permit2 transfer can no longer settle. */

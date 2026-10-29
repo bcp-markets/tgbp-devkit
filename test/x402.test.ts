@@ -563,7 +563,30 @@ describe('createTgbpPaymentFetch', () => {
       token,
       guard,
     })
-    await expect(fetchPaid(`${server.url}/quote`)).rejects.toThrow(RangeError)
+    await expect(fetchPaid(`${server.url}/quote`, undefined, undefined as never)).rejects.toThrow(
+      RangeError,
+    )
+    expect(fake.calls.verify).toHaveLength(0)
+  })
+
+  it('refuses to build a payment fetch with no spend guard', () => {
+    expect(() =>
+      createTgbpPaymentFetch({
+        publicClient,
+        walletClient: payerWallet,
+        maxPencePerRequest: 10,
+        token,
+      } as never),
+    ).toThrow('spend guard')
+  })
+
+  it('signs nothing for a payee the policy does not allow', async () => {
+    const otherPayee = createSpendGuard({
+      policy: { ...policy(), destinations: [payer] },
+      ledgerPath,
+    })
+    const error = await pay(10, otherPayee)(`${server.url}/quote`).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'SPEND_POLICY_DENIED') && error.details.rule).toBe('destinations')
     expect(fake.calls.verify).toHaveLength(0)
   })
 
@@ -587,7 +610,7 @@ describe('createTgbpPaymentFetch', () => {
 
   it('writes a ledger entry for each payment: URL, pence, payee, reason and time', async () => {
     const before = Date.now()
-    await pay()(`${server.url}/quote`)
+    await pay()(`${server.url}/quote?session=secret`)
     const [line] = (await readFile(ledgerPath, 'utf8')).trim().split('\n')
     const entry = JSON.parse(line ?? '')
     expect(entry).toMatchObject({
@@ -600,6 +623,18 @@ describe('createTgbpPaymentFetch', () => {
       reason: REASON.reason,
     })
     expect(Date.parse(entry.at)).toBeGreaterThanOrEqual(before - 1000)
+    expect(Date.parse(entry.at)).toBeLessThanOrEqual(Date.now())
+
+    // What was signed is what the ledger recorded.
+    const [settled] = fake.calls.settle
+    if (!settled) throw new Error('the facilitator settled nothing')
+    const signed = (
+      settled.payload as {
+        permit2Authorization: { permitted: { amount: string }; witness: { to: string } }
+      }
+    ).permit2Authorization
+    expect(BigInt(signed.permitted.amount)).toBe(BigInt(entry.pence) * 10n ** 16n)
+    expect(getAddress(signed.witness.to)).toBe(getAddress(entry.destination))
   })
 
   it('lowers the remaining budget by the price of a payment', async () => {

@@ -139,6 +139,7 @@ async function main(): Promise<void> {
   if (fundFrom === undefined) await waitForFunding()
   const payerBefore = await tgbpBalance(account.address)
 
+  const ledgerDir = await mkdtemp(join(tmpdir(), 'tgbp-x402-demo-'))
   const app = express()
   app.use(
     tgbpPaymentMiddleware({
@@ -154,7 +155,6 @@ async function main(): Promise<void> {
   const { port } = server.address() as AddressInfo
 
   // A spend policy for this run only: one 5p x402 payment to the payee, today.
-  const ledgerDir = await mkdtemp(join(tmpdir(), 'tgbp-x402-demo-'))
   const guard = createSpendGuard({
     policy: {
       version: 1,
@@ -213,7 +213,10 @@ async function main(): Promise<void> {
   } finally {
     server.closeAllConnections()
     server.close()
-    await rm(ledgerDir, { recursive: true, force: true })
+    // A failed clean-up must not hide the error that ended the run.
+    await rm(ledgerDir, { recursive: true, force: true }).catch((error: unknown) => {
+      console.error(`Could not remove ${ledgerDir}:`, error)
+    })
   }
 }
 
