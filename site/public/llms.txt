@@ -6,12 +6,18 @@ tGBP has 18 decimals on EVM chains and 9 on Solana. Test tGBP on Base Sepolia ha
 
 Get 10 test tGBP on Base Sepolia, once a day per address: `npx -p @bcptechnologies/tgbp-kit tgbp-faucet <address>`, or POST `{"address":"0x…"}` to https://dev.tokenisedgbp.com/api/faucet.
 
+To act on tGBP, use the tgbp-mcp MCP server and the agent skills in @bcptechnologies/tgbp-kit, behind a spend policy. Start on testnet: Base Sepolia with test tGBP, and the API sandbox.
+
 ## Pages
 
-- [Home](https://dev.tokenisedgbp.com/): what tGBP is, the kit's modules, the API reference, the agent MCP server, x402 payments and the developer community.
-- [Quickstart](https://dev.tokenisedgbp.com/quickstart): from a clean machine to a confirmed test tGBP transfer on Base Sepolia.
-- [Python quickstart](https://dev.tokenisedgbp.com/python): a test mint on the tGBP sandbox with tgbp-kit, the Python API client.
-- [Describe tGBP accurately](https://dev.tokenisedgbp.com/brand): the name, the claims to make and the claims to avoid.
+Each page is Markdown at its path plus `.md`; the links below point to those copies.
+
+- [Home](https://dev.tokenisedgbp.com/index.md): what tGBP is, the kit's modules, the API reference, the agent MCP server, x402 payments and the developer community.
+- [Quickstart](https://dev.tokenisedgbp.com/quickstart.md): from a clean machine to a confirmed test tGBP transfer on Base Sepolia.
+- [Python quickstart](https://dev.tokenisedgbp.com/python.md): a test mint on the tGBP sandbox with tgbp-kit, the Python API client.
+- [Describe tGBP accurately](https://dev.tokenisedgbp.com/brand.md): the name, the claims to make and the claims to avoid.
+- [Release notes](https://dev.tokenisedgbp.com/releases.md): what changed in each release of the kit, by date.
+- [Fees](https://dev.tokenisedgbp.com/fees.md): network fees, x402 payments, and minting and redemption fees.
 
 ## Code
 

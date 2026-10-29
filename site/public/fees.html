@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fees · tGBP developers</title>
+  <meta name="description" content="What building with tGBP costs: the free kit and test tGBP, network fees, x402 payments, and minting and redemption fees.">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="alternate" type="text/markdown" href="/fees.md">
+  <meta name="theme-color" content="#faf7ef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#09172d" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="tGBP developers">
+  <meta property="og:title" content="Fees · tGBP developers">
+  <meta property="og:description" content="What building with tGBP costs: the free kit and test tGBP, network fees, x402 payments, and minting and redemption fees.">
+  <meta property="og:url" content="https://dev.tokenisedgbp.com/fees">
+  <meta property="og:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
+  <meta property="og:image:width" content="820">
+  <meta property="og:image:height" content="312">
+  <meta property="og:image:alt" content="tGBP, the British pound stablecoin">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Fees · tGBP developers">
+  <meta name="twitter:description" content="What building with tGBP costs: the free kit and test tGBP, network fees, x402 payments, and minting and redemption fees.">
+  <meta name="twitter:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
+  <meta name="twitter:image:alt" content="tGBP, the British pound stablecoin">
+</head>
+<body>
+  <header>
+    <a class="home" href="/"><img src="/assets/tgbp-logo.svg" alt="tGBP" width="107" height="40"> developers</a>
+    <nav>
+      <a href="/quickstart">Quickstart</a>
+      <a href="/python">Python</a>
+      <a href="/brand">Describe tGBP</a>
+      <a href="https://github.com/bcp-markets/tgbp-devkit">GitHub</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Fees</h1>
+    <aside class="agents" aria-label="For AI agents">
+      <p>
+        <strong>For AI agents.</strong> This page is also Markdown, at
+        <a href="/fees.md">/fees.md</a>, and <a href="/llms.txt">llms.txt</a> lists every page. To act on
+        tGBP, install the <code>tgbp-mcp</code> MCP server and the agent skills from
+        <code>@bcptechnologies/tgbp-kit</code>: the
+        <a href="https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy">README</a>
+        has the config. Start on testnet: Base Sepolia, test tGBP from the faucet, and the API
+        sandbox, the server's default. Act through the server and its spend policy, and never ask
+        for the API key or the wallet key.
+      </p>
+    </aside>
+    <p>What you pay to build with tGBP, and who sets each fee.</p>
+
+    <h2>Free</h2>
+    <ul>
+      <li>
+        The kit, <code>@bcptechnologies/tgbp-kit</code> and <code>tgbp-kit</code> for Python, is
+        open source under the MIT licence.
+      </li>
+      <li>
+        Test tGBP on Base Sepolia has no value and costs nothing. The faucet sends 10 test tGBP a
+        day to each address: see the <a href="/quickstart">quickstart</a>.
+      </li>
+    </ul>
+
+    <h2>Network fees</h2>
+    <p>
+      Each on-chain transaction pays the network a fee, in the chain's own token. On EVM chains
+      the sender's wallet pays gas, such as ETH on Base. On Solana the sender pays the
+      transaction fee in SOL, plus rent for the recipient's token account if it has none yet.
+      The fee goes to the network, and it depends on the chain and how busy it is.
+    </p>
+
+    <h2>x402 payments</h2>
+    <p>
+      An x402 payment on Base Sepolia costs the payer the price the server asks and no gas. The
+      payer signs the payment, and the x402.org facilitator settles it and pays the gas.
+    </p>
+
+    <h2>Minting and redemption</h2>
+    <p>
+      Fees for minting and redeeming tGBP through the tGBP API depend on your account's terms.
+      Each redemption the API returns carries <code>fees</code>: the fee's amount and its
+      currency, GBP. An exchange or partner that sells tGBP sets its own fees.
+    </p>
+    <p>For your account's terms, email support@tgbp.io.</p>
+  </main>
+  <footer>
+    Tokenised GBP is issued by BCP Technologies Ltd.
+    <a href="https://www.tokenisedgbp.com">tokenisedgbp.com</a> ·
+    <a href="https://www.tokenisedgbp.com/.well-known/security.txt">Report a vulnerability</a> ·
+    <a href="/releases">Release notes</a> ·
+    <a href="/fees">Fees</a> ·
+    <a href="/llms.txt">llms.txt</a>
+  </footer>
+</body>
+</html>

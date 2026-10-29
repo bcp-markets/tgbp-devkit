@@ -88,7 +88,8 @@
     "build:fixtures": "forge build --root test/fixtures --contracts . --out out --cache-path cache && tsx scripts/export-fixture.ts",
     "prepublishOnly": "pnpm run build",
     "x402:demo": "tsx examples/x402-demo/demo.ts",
-    "check:python-parity": "tsx scripts/check-python-parity.ts"
+    "check:python-parity": "tsx scripts/check-python-parity.ts",
+    "generate:site-md": "tsx scripts/generate-site-md.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import { markdownFileOf, sitePages, toMarkdown } from '../scripts/generate-site-md.js'
+
 const SITE = join(import.meta.dirname, '../site/public')
 const EXAMPLES = join(import.meta.dirname, '../examples/quickstart')
 const PYTHON_EXAMPLES = join(import.meta.dirname, '../examples/python-quickstart')
@@ -25,10 +27,37 @@ function fileOf(path: string): string {
 }
 
 describe('developer site', () => {
-  it('lists every page in llms.txt', () => {
-    for (const file of htmlFiles.filter((file) => file !== '404.html')) {
-      expect(llms, file).toContain(`(${ORIGIN}${pathOf(file)})`)
+  it('lists every page in llms.txt, by its Markdown copy', () => {
+    expect(sitePages()).toEqual(htmlFiles.filter((file) => file !== '404.html').sort())
+    for (const file of sitePages()) {
+      expect(llms, file).toContain(`(${ORIGIN}/${markdownFileOf(file)})`)
     }
+  })
+
+  it('serves a current Markdown copy of every page, and no copy of a page that is gone', () => {
+    expect(siteFiles.filter((file) => file.endsWith('.md')).sort()).toEqual(
+      sitePages().map(markdownFileOf),
+    )
+    for (const file of sitePages()) {
+      expect(read(SITE, markdownFileOf(file)), `${file}: run pnpm generate:site-md`).toBe(
+        toMarkdown(read(SITE, file)),
+      )
+    }
+  })
+
+  it('tells AI readers on every page where its Markdown copy is and what to install', () => {
+    const notes = sitePages().map((file) => {
+      const page = read(SITE, file)
+      const md = `/${markdownFileOf(file)}`
+      expect(page, file).toContain(`<link rel="alternate" type="text/markdown" href="${md}">`)
+      const aside = page.match(/<aside class="agents"[\s\S]*?<\/aside>/)?.[0] ?? ''
+      expect(aside, file).toContain(`<a href="${md}">${md}</a>`)
+      return aside.replaceAll(md, '/page.md')
+    })
+    // One note, the same on every page but for the page's own path.
+    expect(new Set(notes).size).toBe(1)
+    expect(notes[0]).toContain('<code>tgbp-mcp</code> MCP server and the agent skills')
+    expect(notes[0]).toContain('Start on testnet')
   })
 
   it('has a page for every site link in llms.txt', () => {
@@ -129,5 +158,67 @@ describe('developer site', () => {
         .replaceAll('>', '&gt;')
       expect(page, file).toContain(`<pre><code>${escaped}</code></pre>`)
     }
+  })
+})
+
+describe('toMarkdown', () => {
+  const page = (main: string) => `<html><body><main>${main}</main></body></html>`
+
+  it('links site pages to their Markdown copies and keeps other URLs', () => {
+    expect(
+      toMarkdown(
+        page(
+          '<p><a href="/">Home</a> <a href="/brand#x">Brand</a> <a href="/llms.txt">llms</a> <a href="https://x402.org/?a=1&amp;b=2">x402</a></p>',
+        ),
+      ),
+    ).toBe(
+      `[Home](${ORIGIN}/index.md) [Brand](${ORIGIN}/brand.md) [llms](${ORIGIN}/llms.txt) [x402](https://x402.org/?a=1&b=2)\n`,
+    )
+  })
+
+  it('converts tables, notes, lists and code', () => {
+    expect(
+      toMarkdown(
+        page(`<h2 id="a">A &amp; B</h2>
+<table><thead><tr><th>Key</th><th>Use</th></tr></thead><tbody><tr><td><code>a|b</code></td><td>x</td></tr></tbody></table>
+<div class="warning" role="note"><strong>Note.</strong> Two
+  lines.</div>
+<ol><li>One</li><li>Two <form method="post" action="/api/faucet"><input name="address"></form></li></ol>
+<pre><code>x &lt; 1
+</code></pre>`),
+      ),
+    ).toBe(`## A & B
+
+| Key | Use |
+| --- | --- |
+| \`a\\|b\` | x |
+
+> **Note.** Two lines.
+
+1. One
+2. Two (The form sends \`address\` by POST to ${ORIGIN}/api/faucet.)
+
+\`\`\`
+x < 1
+\`\`\`
+`)
+  })
+
+  it.each([
+    ['an element it has no Markdown for', '<p><em>x</em></p>', 'no Markdown for <em>'],
+    ['an unknown entity', '<p>&nbsp;</p>', 'unknown entity &nbsp;'],
+    ['a mismatched close tag', '<p><code>x</p>', '</p> closes <code>'],
+    ['an unclosed element', '<p>x', '<p> is never closed'],
+    ['text loose in a list', '<ul>x<li>y</li></ul>', 'text "x" outside <li>'],
+    ['a comment', '<p>x</p><!-- y -->', 'no Markdown for "<!-- y -->"'],
+    ['an uppercase tag', '<P>x</P>', 'no Markdown for "<P>x</P>"'],
+    [
+      'a form field it cannot describe',
+      '<p><form><select name="n"></select></form></p>',
+      '<select> in a form',
+    ],
+    ['an unnamed form input', '<p><form><input type="submit"></form></p>', '<input> in a form'],
+  ])('throws on %s', (_, main, message) => {
+    expect(() => toMarkdown(page(main))).toThrow(message)
   })
 })
