@@ -14,7 +14,14 @@
 
 ## Run it
 
-You need test tGBP on Base Sepolia. Ask the tGBP developer program for some.
+You need test tGBP on Base Sepolia. The faucet sends 10 test tGBP, once a day per address:
+
+```sh
+npx -p @bcptechnologies/tgbp-kit tgbp-faucet <address>
+```
+
+Fund your Foundry keystore account with it and pass `--fund-from`, or pass `--pay-to` and run the
+faucet on the payer address the demo prints.
 
 ```sh
 pnpm install

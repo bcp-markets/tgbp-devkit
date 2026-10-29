@@ -4,11 +4,22 @@
   "compatibility_date": "2026-08-07",
   "workers_dev": false,
   "preview_urls": false,
-  // Static assets only: there is no Worker script, so every request is served from ./public.
+  // The Worker runs only for /api/* (the test tGBP faucet); ./public serves every other path.
+  "main": "worker/index.ts",
   "assets": {
     "directory": "./public",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/api/*"]
   },
+  // One instance runs every drip in turn and keeps the rate limits.
+  // The faucet wallet's key is a secret: wrangler secret put FAUCET_PRIVATE_KEY --cwd site
+  "durable_objects": {
+    "bindings": [{ "name": "FAUCET", "class_name": "Faucet" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Faucet"] }],
+  // Keeps the faucet's drip and failure logs.
+  "observability": { "enabled": true },
   // The first deploy creates the DNS record and certificate for this hostname.
   "routes": [{ "pattern": "dev.tokenisedgbp.com", "custom_domain": true }]
 }

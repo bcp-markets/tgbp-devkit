@@ -39,8 +39,7 @@
     <h1>Quickstart</h1>
     <p>
       This guide takes a clean machine to a confirmed test tGBP transfer on Base Sepolia. It takes
-      about 15 minutes, plus the wait for your test tGBP to arrive. You need Node.js 20.6 or later
-      and a terminal.
+      about 15 minutes. You need Node.js 20.6 or later and a terminal.
     </p>
     <p>
       The scripts are also in the repo, under
@@ -98,21 +97,27 @@ console.log(`Test wallet created. Address: ${privateKeyToAccount(key).address}`)
       never send it real funds.
     </p>
 
-    <h2>4. Fund the wallet</h2>
+    <h2 id="fund">4. Fund the wallet</h2>
     <ol>
       <li>
         Get a little Base Sepolia ETH to pay gas, from one of the
         <a href="https://docs.base.org/get-started/get-funds">faucets Base lists</a>.
       </li>
       <li>
-        Post your wallet address in the
-        <a href="https://t.me/tgbpdevs">tGBP developers Telegram group</a> and ask for test tGBP. An admin
-        sends it and replies in the group.
+        Get 10 test tGBP from the tGBP faucet. In the project, run
+        <code>npx tgbp-faucet &lt;your address&gt;</code>, or paste the address into this form.
+        <form class="faucet" method="post" action="/api/faucet">
+          <label for="faucet-address">Wallet address</label>
+          <input id="faucet-address" name="address" type="text" required
+            pattern="0x[0-9a-fA-F]{40}" placeholder="0x…" autocomplete="off" spellcheck="false">
+          <button type="submit">Send 10 test tGBP</button>
+        </form>
+        The faucet sends once a day to each address and to each network.
       </li>
     </ol>
     <div class="warning" role="note">
-      <strong>Admins never DM first.</strong> Test tGBP arrives on-chain. Nobody needs your private
-      key, and nobody will ask you to pay for test tokens.
+      <strong>The faucet needs only your address.</strong> Never paste a private key into it or
+      anywhere else. Nobody will ask you to pay for test tokens.
     </div>
 
     <h2>5. Check the balance</h2>

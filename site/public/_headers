@@ -8,3 +8,8 @@
 
 /llms.txt
   Content-Type: text/plain; charset=utf-8
+
+# The faucet form posts to /api/faucet.
+/quickstart
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'

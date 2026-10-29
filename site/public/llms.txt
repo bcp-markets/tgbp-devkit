@@ -4,6 +4,8 @@
 
 tGBP has 18 decimals on EVM chains and 9 on Solana. Test tGBP on Base Sepolia has no value.
 
+Get 10 test tGBP on Base Sepolia, once a day per address: `npx -p @bcptechnologies/tgbp-kit tgbp-faucet <address>`, or POST `{"address":"0x…"}` to https://dev.tokenisedgbp.com/api/faucet.
+
 ## Pages
 
 - [Home](https://dev.tokenisedgbp.com/): what tGBP is, the kit's modules, the API reference, the agent MCP server, x402 payments and the developer community.
