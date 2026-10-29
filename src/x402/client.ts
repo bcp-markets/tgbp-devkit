@@ -217,6 +217,8 @@ export function createTgbpPaymentFetch({
       body: request.body === null ? null : await request.arrayBuffer(),
       // A redirect would carry the signed payment to wherever it points.
       redirect: 'error',
+      // An abort after signing surfaces as PAYMENT_UNCONFIRMED below.
+      signal: request.signal,
     })
     for (const [name, value] of Object.entries(http.encodePaymentSignatureHeader(payload))) {
       paid.headers.set(name, value)

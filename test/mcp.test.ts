@@ -371,12 +371,16 @@ describe('tgbp_x402_pay', () => {
     const app = express()
     app.use(
       tgbpPaymentMiddleware({
-        routes: { 'GET /quote': { pence: 5, payTo: PAY_TO } },
+        routes: {
+          'GET /quote': { pence: 5, payTo: PAY_TO },
+          'GET /big': { pence: 5, payTo: PAY_TO },
+        },
         token: TGBP_BASE_SEPOLIA,
         facilitator: fake.facilitator,
       }),
     )
     app.get('/quote', (_req, res) => res.json({ quote: 'paid' }))
+    app.get('/big', (_req, res) => res.type('text').send('x'.repeat(30_000)))
     app.get('/free', (_req, res) => res.json({ quote: 'free' }))
     paid = await serve(app)
   })
@@ -413,6 +417,34 @@ describe('tgbp_x402_pay', () => {
       amount: '0.05',
       reason: 'a quote for the user',
     })
+  })
+
+  it('returns the first 20 kB of a large paid response, with the settlement', async () => {
+    const { body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/big`,
+      maxPence: 5,
+      reason: 'a large answer',
+    })
+    expect(body.body).toHaveLength(20_000)
+    expect(body.truncated).toBe(true)
+    expect(body.paid.transaction).toBe(SETTLE_HASH)
+  })
+
+  it('returns only the status of a URL that does not ask for payment', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/free`,
+      maxPence: 5,
+      reason: 'a free answer',
+    })
+    expect(isError).toBe(false)
+    expect(body).toEqual({
+      url: `${paid.url}/free`,
+      status: 200,
+      paid: null,
+      message: 'The URL did not ask for payment; nothing was paid.',
+    })
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(await ledger()).toBe('')
   })
 
   it('returns the price with estimate: true and signs nothing', async () => {
