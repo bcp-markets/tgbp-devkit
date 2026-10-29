@@ -148,7 +148,7 @@ describe('createTgbpPaymentFetch', () => {
   let ledgerPath: string
   let guard: SpendGuard
 
-  /** Pays x402 to PAY_TO on anvil, up to 15p a day. */
+  /** Pays x402 to PAY_TO on anvil, at the local test server, up to 15p a day. */
   const policy = (): SpendPolicy => ({
     version: 1,
     expiresAt: '2099-01-01T00:00:00Z',
@@ -158,6 +158,12 @@ describe('createTgbpPaymentFetch', () => {
     perTransferCap: '0.10',
     dailyCap: '0.15',
     redemptionApprovalAbove: '0',
+    x402: {
+      // The test server is plain http on a random port, so it is listed as an endpoint.
+      services: [{ match: server.url, category: 'quotes' }],
+      categoryBudgets: { quotes: '0.15' },
+      paymentsPerMinute: 10,
+    },
   })
 
   beforeAll(async () => {
@@ -212,7 +218,8 @@ describe('createTgbpPaymentFetch', () => {
 
     dir = await mkdtemp(join(tmpdir(), 'tgbp-x402-'))
     ledgerPath = join(dir, 'policy.ledger.jsonl')
-    guard = createSpendGuard({ policy: policy(), ledgerPath })
+    // The owner approves the first payment to each service up front.
+    guard = createSpendGuard({ policy: policy(), ledgerPath, approver: async () => true })
   })
 
   afterEach(async () => {
@@ -569,6 +576,43 @@ describe('createTgbpPaymentFetch', () => {
     expect(fake.calls.verify).toHaveLength(0)
   })
 
+  it('signs nothing for a URL on a service the policy does not list', async () => {
+    const otherService = createSpendGuard({
+      policy: {
+        ...policy(),
+        x402: {
+          services: [{ match: 'localhost', category: 'quotes' }],
+          categoryBudgets: { quotes: '0.15' },
+          paymentsPerMinute: 10,
+        },
+      },
+      ledgerPath,
+      approver: async () => true,
+    })
+    const error = await pay(10, otherService)(`${server.url}/quote`).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'SPEND_POLICY_DENIED') && error.details.rule).toBe('services')
+    expect(fake.calls.verify).toHaveLength(0)
+    await expect(readFile(ledgerPath)).rejects.toThrow()
+  })
+
+  it('signs nothing for the first payment to a service until the owner approves it', async () => {
+    let approve = false
+    const owner = createSpendGuard({
+      policy: policy(),
+      ledgerPath,
+      approver: async () => approve,
+    })
+    const error = await pay(10, owner)(`${server.url}/quote`).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'SPEND_POLICY_DENIED') && error.details.rule).toBe('firstPayment')
+    expect((error as Error).message).toContain('approval required')
+    expect(fake.calls.verify).toHaveLength(0)
+
+    approve = true
+    const { settlement } = await pay(10, owner)(`${server.url}/quote`)
+    expect(settlement?.success).toBe(true)
+    expect(fake.calls.settle).toHaveLength(1)
+  })
+
   it('refuses the payment that would pass the daily cap, counting other kit spend', async () => {
     await guard.authorize({
       action: 'transfer',
@@ -648,8 +692,21 @@ describe('createTgbpPaymentFetch', () => {
 
   it('throws PAYMENT_REFUSED with the deadline when a refusal gives a reason that is not a string', async () => {
     const crafted = await serveTerms({ ...terms(), error: 123 })
+    // This test pays a second local server, so its policy lists that server instead.
+    const craftedGuard = createSpendGuard({
+      policy: {
+        ...policy(),
+        x402: {
+          services: [{ match: crafted.url, category: 'quotes' }],
+          categoryBudgets: { quotes: '0.15' },
+          paymentsPerMinute: 10,
+        },
+      },
+      ledgerPath,
+      approver: async () => true,
+    })
     try {
-      const error = await pay()(`${crafted.url}/quote`).catch((e: unknown) => e)
+      const error = await pay(10, craftedGuard)(`${crafted.url}/quote`).catch((e: unknown) => e)
       expect(error).toMatchObject({ code: 'PAYMENT_REFUSED', details: { reason: undefined } })
       expect((error as { details: { deadline: unknown } }).details.deadline).toEqual(
         expect.any(Number),

@@ -5,8 +5,10 @@
 1. It makes a fresh payer key in memory and checks that the payer holds 0 ETH.
 2. The payer receives 5p of test tGBP.
 3. A local Express server prices `GET /quote` at 5p with `tgbpPaymentMiddleware`.
-4. The agent calls `/quote` with `createTgbpPaymentFetch`. It gets HTTP 402, and its spend
-   guard allows the 5p and records it in the spend ledger. It signs an EIP-2612 permit for
+4. The agent calls `/quote` with `createTgbpPaymentFetch`. It gets HTTP 402. Its spend policy
+   lists `/quote` as the one service it may pay. This is the first payment to that service, so
+   the guard asks the owner, and the demo approves. The guard then allows the 5p and records it
+   in the spend ledger. It signs an EIP-2612 permit for
    Permit2 and a Permit2 transfer, and sends the request again with the payment.
 5. The x402.org facilitator settles the payment on Base Sepolia and pays the gas. The server
    returns the quote.
