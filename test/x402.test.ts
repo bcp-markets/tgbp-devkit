@@ -4,11 +4,8 @@
  * real contract state.
  */
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { FacilitatorClient } from '@x402/core/server'
-import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
 import express from 'express'
 import {
   type Address,
@@ -27,66 +24,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createSpendGuard, type SpendGuard, type SpendPolicy } from '../src/agent/index.js'
 import { isTgbpKitError } from '../src/errors.js'
 import type { EvmTokenDeployment } from '../src/evm/index.js'
-import { createTgbpPaymentFetch } from '../src/x402/client.js'
+import { createTgbpPaymentFetch, quoteTgbpPayment } from '../src/x402/client.js'
 import { TGBP_BASE_SEPOLIA, tgbpPaymentMiddleware, tgbpPrice } from '../src/x402/server.js'
 import { startAnvil } from './anvil.js'
 import { mockTgbpAbi, mockTgbpBytecode } from './fixtures/mock-tgbp.js'
+import { fakeFacilitator, SETTLE_HASH, serve } from './x402-fakes.js'
 
 const FIVE_PENCE = 5n * 10n ** 16n
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3'
 const PAY_TO = '0x1111111111111111111111111111111111111111'
-const SETTLE_HASH = `0x${'ab'.repeat(32)}` as const
-
-/** Records what the middleware sends it; answers verify and settle as told. */
-function fakeFacilitator(network: string) {
-  const calls: { verify: PaymentPayload[]; settle: PaymentPayload[] } = { verify: [], settle: [] }
-  let refuse: string | undefined
-  let failSettle: string | undefined
-  const facilitator: FacilitatorClient = {
-    getSupported: async () => ({
-      kinds: [{ x402Version: 2, scheme: 'exact', network: network as `${string}:${string}` }],
-      extensions: ['eip2612GasSponsoring'],
-      signers: {},
-    }),
-    verify: async (payload: PaymentPayload, _requirements: PaymentRequirements) => {
-      calls.verify.push(payload)
-      return refuse === undefined
-        ? { isValid: true, payer: payload.payload.from as string }
-        : { isValid: false, invalidReason: refuse }
-    },
-    settle: async (payload: PaymentPayload, requirements: PaymentRequirements) => {
-      calls.settle.push(payload)
-      return failSettle === undefined
-        ? { success: true, transaction: SETTLE_HASH, network: requirements.network }
-        : {
-            success: false,
-            errorReason: failSettle,
-            transaction: '',
-            network: requirements.network,
-          }
-    },
-  }
-  return {
-    facilitator,
-    calls,
-    refuseWith: (reason: string) => (refuse = reason),
-    failSettleWith: (reason: string) => (failSettle = reason),
-  }
-}
-
-async function serve(app: express.Express): Promise<{ url: string; close: () => Promise<void> }> {
-  return new Promise((resolve) => {
-    const server = app.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as AddressInfo
-      const close = () =>
-        new Promise<void>((done) => {
-          server.close(() => done())
-          server.closeAllConnections()
-        })
-      resolve({ url: `http://127.0.0.1:${port}`, close })
-    })
-  })
-}
 
 /** A server that answers every request with 402 and these terms, to test what the client refuses to sign. */
 async function serveTerms(paymentRequired: Record<string, unknown>) {
@@ -417,6 +363,39 @@ describe('createTgbpPaymentFetch', () => {
     expect(fake.calls.verify).toHaveLength(0)
   })
 
+  it("throws PAYMENT_OVER_LIMIT when the price is above the call's own maxPence", async () => {
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: payerWallet,
+      maxPencePerRequest: 10,
+      token,
+      guard,
+    })
+    await expect(
+      fetchPaid(`${server.url}/quote`, undefined, { ...REASON, maxPence: 4 }),
+    ).rejects.toMatchObject({ code: 'PAYMENT_OVER_LIMIT', details: { limit: 4n * 10n ** 16n } })
+    expect(fake.calls.verify).toHaveLength(0)
+    expect(await guard.budget()).toMatchObject({ spent: '0' })
+  })
+
+  it('quotes a route without signing or asking the guard', async () => {
+    const quote = await quoteTgbpPayment(`${server.url}/quote`, undefined, { token })
+    expect(quote).toEqual({
+      free: false,
+      url: `${server.url}/quote`,
+      amount: FIVE_PENCE,
+      payTo: getAddress(PAY_TO),
+      network: `eip155:${foundry.id}`,
+    })
+    expect(await quoteTgbpPayment(`${server.url}/free`, undefined, { token })).toEqual({
+      free: true,
+      url: `${server.url}/free`,
+      status: 200,
+    })
+    expect(fake.calls.verify).toHaveLength(0)
+    expect(await guard.budget()).toMatchObject({ spent: '0' })
+  })
+
   it('throws PAYMENT_REFUSED with the reason when the facilitator rejects the payment', async () => {
     fake.refuseWith('permit2_invalid_signature')
     const error = await pay()(`${server.url}/quote`).catch((e: unknown) => e)
@@ -653,6 +632,30 @@ describe('createTgbpPaymentFetch', () => {
       })
     } finally {
       await bare.close()
+    }
+  })
+
+  it('throws PAYMENT_NOT_OFFERED when the terms list no offers', async () => {
+    const crafted = await serveTerms({ x402Version: 2, accepts: null })
+    try {
+      await expect(pay()(`${crafted.url}/quote`)).rejects.toMatchObject({
+        code: 'PAYMENT_NOT_OFFERED',
+      })
+    } finally {
+      await crafted.close()
+    }
+  })
+
+  it('throws PAYMENT_REFUSED with the deadline when a refusal gives a reason that is not a string', async () => {
+    const crafted = await serveTerms({ ...terms(), error: 123 })
+    try {
+      const error = await pay()(`${crafted.url}/quote`).catch((e: unknown) => e)
+      expect(error).toMatchObject({ code: 'PAYMENT_REFUSED', details: { reason: undefined } })
+      expect((error as { details: { deadline: unknown } }).details.deadline).toEqual(
+        expect.any(Number),
+      )
+    } finally {
+      await crafted.close()
     }
   })
 })

@@ -7,7 +7,7 @@
  *   TGBP_API_KEY            enables mint, redeem and swap
  *   TGBP_ENVIRONMENT        sandbox (default) or production
  *   TGBP_SWAP_BASE_URL      the swap host; production uses its own by default
- *   TGBP_EVM_PRIVATE_KEY    the agent wallet; enables balance, transfer and redeem
+ *   TGBP_EVM_PRIVATE_KEY    the agent wallet; enables balance, transfer, redeem and x402 pay
  *   TGBP_RPC_URL_<CHAIN>    an RPC URL per chain, e.g. TGBP_RPC_URL_SEPOLIA
  *   TGBP_APPROVAL_TIMEOUT_SECONDS  how long a redemption waits for a human; default 300
  *

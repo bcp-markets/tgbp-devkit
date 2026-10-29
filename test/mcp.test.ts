@@ -3,18 +3,21 @@
  * that reach no API and sign nothing, and redemption approval by elicitation.
  * The chain helpers are mocked, so a call to them is a signature attempt.
  */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import express from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { SpendPolicy } from '../src/agent/index.js'
 import type { TgbpClient } from '../src/api/client.js'
 import type { TgbpSwapClient } from '../src/api/swap.js'
 import { createTgbpMcpServer, type TgbpMcpServerOptions } from '../src/mcp/index.js'
+import { TGBP_BASE_SEPOLIA, tgbpPaymentMiddleware, x402Network } from '../src/x402/server.js'
+import { fakeFacilitator, SETTLE_HASH, serve } from './x402-fakes.js'
 
 const chain = vi.hoisted(() => ({
   transfer: vi.fn(async () => ({ hash: '0xburn', receipt: {} })),
@@ -126,7 +129,7 @@ function expectNothingSent() {
 }
 
 describe('tgbp MCP server', () => {
-  it('lists a tool for the policy, balance, transfer, mint, redeem and swap', async () => {
+  it('lists a tool for the policy, balance, transfer, mint, redeem, swap and x402', async () => {
     const { tools } = await (await connect()).listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([
       'tgbp_balance',
@@ -135,6 +138,7 @@ describe('tgbp MCP server', () => {
       'tgbp_redeem',
       'tgbp_swap',
       'tgbp_transfer',
+      'tgbp_x402_pay',
     ])
   })
 
@@ -334,5 +338,189 @@ describe('swap and mint input', () => {
       expect.objectContaining({ chainId: 'sepolia', tgbpAmount: '10.5' }),
       { idempotencyKey: 'retry_1' },
     )
+  })
+})
+
+describe('tgbp_x402_pay', () => {
+  const PAY_TO = '0x1111111111111111111111111111111111111111'
+  const X402_POLICY: SpendPolicy = {
+    ...POLICY,
+    actions: [...POLICY.actions, 'x402'],
+    chains: [...POLICY.chains, 'base-sepolia'],
+    destinations: [...POLICY.destinations, PAY_TO],
+  }
+
+  let fake: ReturnType<typeof fakeFacilitator>
+  let paid: Awaited<ReturnType<typeof serve>>
+  const signTypedData = vi.fn(async () => `0x${'11'.repeat(65)}`)
+  /** The wallet the tool pays from: every read passes, and a signature is a payment attempt. */
+  const x402Evm = () => ({
+    publicClient: {
+      getChainId: async () => TGBP_BASE_SEPOLIA.chainId,
+      readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
+        if (functionName === 'paused' || functionName === 'isBanned') return false
+        if (functionName === 'balanceOf') return 10n ** 18n
+        return 0n
+      }),
+    },
+    walletClient: { account: { address: AGENT, type: 'local' }, signTypedData },
+  })
+
+  beforeEach(async () => {
+    fake = fakeFacilitator(x402Network(TGBP_BASE_SEPOLIA))
+    const app = express()
+    app.use(
+      tgbpPaymentMiddleware({
+        routes: {
+          'GET /quote': { pence: 5, payTo: PAY_TO },
+          'GET /big': { pence: 5, payTo: PAY_TO },
+        },
+        token: TGBP_BASE_SEPOLIA,
+        facilitator: fake.facilitator,
+      }),
+    )
+    app.get('/quote', (_req, res) => res.json({ quote: 'paid' }))
+    app.get('/big', (_req, res) => res.type('text').send('x'.repeat(30_000)))
+    app.get('/free', (_req, res) => res.json({ quote: 'free' }))
+    paid = await serve(app)
+  })
+
+  afterEach(() => paid.close())
+
+  const connectX402 = (policy: SpendPolicy = X402_POLICY) =>
+    connect({
+      server: {
+        policy,
+        evm: x402Evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
+      },
+    })
+
+  const ledger = () => readFile(join(dir, 'ledger.jsonl'), 'utf8').catch(() => '')
+
+  it('pays the URL and returns the service response with the settlement', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/quote`,
+      maxPence: 5,
+      reason: 'a quote for the user',
+    })
+    expect(isError).toBe(false)
+    expect(body).toMatchObject({
+      status: 200,
+      body: JSON.stringify({ quote: 'paid' }),
+      truncated: false,
+      paid: { amount: '0.05', payTo: PAY_TO, transaction: SETTLE_HASH },
+    })
+    expect(fake.calls.settle).toHaveLength(1)
+    const [entry] = (await ledger()).trim().split('\n')
+    expect(JSON.parse(entry ?? '{}')).toMatchObject({
+      action: 'x402',
+      amount: '0.05',
+      reason: 'a quote for the user',
+    })
+  })
+
+  it('returns the first 20 kB of a large paid response, with the settlement', async () => {
+    const { body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/big`,
+      maxPence: 5,
+      reason: 'a large answer',
+    })
+    expect(body.body).toHaveLength(20_000)
+    expect(body.truncated).toBe(true)
+    expect(body.paid.transaction).toBe(SETTLE_HASH)
+  })
+
+  it('returns only the status of a URL that does not ask for payment', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/free`,
+      maxPence: 5,
+      reason: 'a free answer',
+    })
+    expect(isError).toBe(false)
+    expect(body).toEqual({
+      url: `${paid.url}/free`,
+      status: 200,
+      paid: null,
+      message: 'The URL did not ask for payment; nothing was paid.',
+    })
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(await ledger()).toBe('')
+  })
+
+  it('returns the price with estimate: true and signs nothing', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/quote`,
+      maxPence: 4,
+      estimate: true,
+    })
+    expect(isError).toBe(false)
+    expect(body).toEqual({
+      estimate: true,
+      free: false,
+      url: `${paid.url}/quote`,
+      amount: '0.05',
+      payTo: PAY_TO,
+      network: x402Network(TGBP_BASE_SEPOLIA),
+      maxPence: 4,
+      withinMax: false,
+    })
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(fake.calls.verify).toHaveLength(0)
+    expect(await ledger()).toBe('')
+  })
+
+  it('says a route is free with estimate: true', async () => {
+    const { body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/free`,
+      maxPence: 5,
+      estimate: true,
+    })
+    expect(body).toMatchObject({ estimate: true, free: true, status: 200 })
+  })
+
+  it('refuses a price above maxPence without signing', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/quote`,
+      maxPence: 4,
+      reason: 'a quote for the user',
+    })
+    expect(isError).toBe(true)
+    expect(body.code).toBe('PAYMENT_OVER_LIMIT')
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(await ledger()).toBe('')
+  })
+
+  it('returns the spend guard refusal and signs nothing', async () => {
+    const policy = { ...X402_POLICY, destinations: POLICY.destinations }
+    const { isError, body } = await call(await connectX402(policy), 'tgbp_x402_pay', {
+      url: `${paid.url}/quote`,
+      maxPence: 5,
+      reason: 'a quote for the user',
+    })
+    expect(isError).toBe(true)
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details.rule).toBe('destinations')
+    expect(body.message).toContain(PAY_TO)
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(fake.calls.verify).toHaveLength(0)
+  })
+
+  it('refuses a payment with no reason before any request', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/quote`,
+      maxPence: 5,
+    })
+    expect(isError).toBe(true)
+    expect(body.message).toMatch(/reason/)
+    expect(signTypedData).not.toHaveBeenCalled()
+  })
+
+  it('refuses a URL that is not http or https', async () => {
+    const client = await connectX402()
+    const result = await client.callTool({
+      name: 'tgbp_x402_pay',
+      arguments: { url: 'file:///etc/passwd', maxPence: 5, estimate: true },
+    })
+    expect(result.isError).toBe(true)
   })
 })

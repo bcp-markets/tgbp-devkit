@@ -194,7 +194,8 @@ See the [Python README](python/README.md) and the
 
 ## Agents: MCP server, skills and spend policy
 
-`tgbp-mcp` is an MCP server that lets an LLM agent read balances, send, mint, redeem and swap tGBP.
+`tgbp-mcp` is an MCP server that lets an LLM agent read balances, send, mint, redeem and swap tGBP,
+and pay x402 URLs in tGBP.
 Every tool runs behind a **Know Your Agent spend policy**: a JSON file that denies anything it
 does not allow. The [x402 client](#x402-payments-base-sepolia) runs behind the same policy.
 
@@ -275,17 +276,30 @@ ones can add up to.
 | `TGBP_API_KEY` | Enables mint, redeem and swap. |
 | `TGBP_ENVIRONMENT` | `sandbox` (default) or `production`. |
 | `TGBP_SWAP_BASE_URL` | The swap host. Production uses its own; the sandbox needs this set to swap. |
-| `TGBP_EVM_PRIVATE_KEY` | The agent's wallet. Enables balance, transfer and redeem. |
+| `TGBP_EVM_PRIVATE_KEY` | The agent's wallet. Enables balance, transfer, redeem and x402 pay. |
 | `TGBP_RPC_URL_<CHAIN>` | An RPC URL for each chain: the chain key in capitals, `-` as `_`, e.g. `TGBP_RPC_URL_ARBITRUM_SEPOLIA`. |
 | `TGBP_APPROVAL_TIMEOUT_SECONDS` | How long a redemption waits for a human. Default 300. |
 
-The tools are `tgbp_policy`, `tgbp_balance`, `tgbp_transfer`, `tgbp_mint`, `tgbp_redeem` and
-`tgbp_swap`. On-chain actions run on EVM chains. `tgbp_redeem` creates the redemption, then
+The tools are `tgbp_policy`, `tgbp_balance`, `tgbp_transfer`, `tgbp_mint`, `tgbp_redeem`,
+`tgbp_swap` and `tgbp_x402_pay`. On-chain actions run on EVM chains. `tgbp_redeem` creates the redemption, then
 burns the tGBP by sending it to the redemption's burn address, but only when the API's redemption
 is `pending` and matches the chain, amount and bank account asked for.
 `tgbp_swap` converts a deposit the
 swap API has already confirmed. `tgbp_mint` and `tgbp_swap` take an optional `idempotencyKey`:
 after an ambiguous failure, retry with the key from the error to get the first record back.
+
+`tgbp_x402_pay` takes `url`, `maxPence`, `reason` and an optional `estimate`. It sends a GET to
+the URL and pays its x402 price in tGBP on Base Sepolia from the agent's wallet, through the
+[x402 client](#x402-payments-base-sepolia), then returns the service's status and the first 20 kB
+of its response with the settlement. A URL that does not ask for payment returns its status
+only, and a call that takes longer than 45 seconds fails. A price above `maxPence` is refused before
+anything is signed. With `estimate: true` it returns the price and whether it fits `maxPence`,
+signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
+The policy must allow `x402` on `base-sepolia` and the payee. The tool needs
+`TGBP_EVM_PRIVATE_KEY`, `TGBP_RPC_URL_BASE_SEPOLIA`, and the `@x402/core` and `@x402/evm`
+packages: add `"-p", "@x402/core@2", "-p", "@x402/evm@2"` to the `npx` arguments above. The other
+tools run without them. The server fetches whatever URL the agent names, from the machine it runs
+on, so run it where that is acceptable.
 
 ### Skills
 
@@ -373,13 +387,17 @@ without signing anything. These checks are best effort, because the state can ch
 payment settles. The client also refuses to sign, with `PAYMENT_OVER_LIMIT` or
 `PAYMENT_NOT_OFFERED`, when:
 
-- the price is above `maxPencePerRequest`
+- the price is above `maxPencePerRequest`, or above the call's own `maxPence` when it passes one
 - the offer is not the exact scheme's Permit2 method under tGBP's EIP-712 domain
 - the payment would stay valid for longer than 600 seconds
 - the 402 came from a different origin after a redirect
 
 One payment fetch pays one request at a time, because payments signed at once would share a
 permit nonce.
+
+`quoteTgbpPayment(url)` reads a route's price without paying: it sends the request once and
+returns the tGBP offer's `amount` in base units, `payTo` and `network`, or `free: true` when the
+route does not answer 402. It signs nothing and does not ask the spend guard.
 
 After it signs, the client throws `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED` for any outcome other
 than a reported settlement. **Neither proves the payment did not happen.** The signature can still
