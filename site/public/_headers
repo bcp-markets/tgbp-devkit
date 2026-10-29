@@ -9,6 +9,9 @@
 /llms.txt
   Content-Type: text/plain; charset=utf-8
 
+/*.md
+  Content-Type: text/markdown; charset=utf-8
+
 # The faucet form posts to /api/faucet.
 /quickstart
   ! Content-Security-Policy

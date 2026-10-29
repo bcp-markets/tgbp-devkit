@@ -492,7 +492,13 @@ with no role on the token, and holds only test tGBP and a little Base Sepolia ET
 `examples/python-quickstart/` verbatim, and
 `test/site.test.ts` fails when they drift apart or when a page is missing from `llms.txt`.
 
+For AI agents, every page has a Markdown copy at its path plus `.md` (`/index.md` for the home
+page), and `llms.txt` links those copies. Each page also opens with a short note for AI readers.
+`pnpm generate:site-md` writes the copies from the HTML. The test fails when a copy is out of date.
+Add an entry to `releases.html` with each npm or PyPI release.
+
 ```sh
+pnpm generate:site-md                         # rewrite the Markdown copies after editing a page
 pnpm dlx wrangler@4.119.0 dev --cwd site      # serve locally
 pnpm dlx wrangler@4.119.0 deploy --cwd site   # publish; needs Cloudflare access
 pnpm dlx wrangler@4.119.0 secret put FAUCET_PRIVATE_KEY --cwd site   # the faucet wallet's key

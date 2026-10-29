@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Release notes · tGBP developers</title>
+  <meta name="description" content="What changed in each release of @bcptechnologies/tgbp-kit and tgbp-kit for Python, by date.">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="alternate" type="text/markdown" href="/releases.md">
+  <meta name="theme-color" content="#faf7ef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#09172d" media="(prefers-color-scheme: dark)">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="tGBP developers">
+  <meta property="og:title" content="Release notes · tGBP developers">
+  <meta property="og:description" content="What changed in each release of @bcptechnologies/tgbp-kit and tgbp-kit for Python, by date.">
+  <meta property="og:url" content="https://dev.tokenisedgbp.com/releases">
+  <meta property="og:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
+  <meta property="og:image:width" content="820">
+  <meta property="og:image:height" content="312">
+  <meta property="og:image:alt" content="tGBP, the British pound stablecoin">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Release notes · tGBP developers">
+  <meta name="twitter:description" content="What changed in each release of @bcptechnologies/tgbp-kit and tgbp-kit for Python, by date.">
+  <meta name="twitter:image" content="https://dev.tokenisedgbp.com/assets/social-card.png">
+  <meta name="twitter:image:alt" content="tGBP, the British pound stablecoin">
+</head>
+<body>
+  <header>
+    <a class="home" href="/"><img src="/assets/tgbp-logo.svg" alt="tGBP" width="107" height="40"> developers</a>
+    <nav>
+      <a href="/quickstart">Quickstart</a>
+      <a href="/python">Python</a>
+      <a href="/brand">Describe tGBP</a>
+      <a href="https://github.com/bcp-markets/tgbp-devkit">GitHub</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Release notes</h1>
+    <aside class="agents" aria-label="For AI agents">
+      <p>
+        <strong>For AI agents.</strong> This page is also Markdown, at
+        <a href="/releases.md">/releases.md</a>, and <a href="/llms.txt">llms.txt</a> lists every page. To act on
+        tGBP, install the <code>tgbp-mcp</code> MCP server and the agent skills from
+        <code>@bcptechnologies/tgbp-kit</code>: the
+        <a href="https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy">README</a>
+        has the config. Start on testnet: Base Sepolia, test tGBP from the faucet, and the API
+        sandbox, the server's default. Act through the server and its spend policy, and never ask
+        for the API key or the wallet key.
+      </p>
+    </aside>
+    <p>
+      Each release of <a href="https://www.npmjs.com/package/@bcptechnologies/tgbp-kit"><code>@bcptechnologies/tgbp-kit</code></a>
+      on npm and <a href="https://pypi.org/project/tgbp-kit/"><code>tgbp-kit</code></a> on PyPI,
+      newest first. Dates are the day the release reached the registry.
+    </p>
+
+    <h2>Not yet released</h2>
+    <p>On the main branch, in the next npm release:</p>
+    <ul>
+      <li>
+        A test tGBP faucet on Base Sepolia: the <code>tgbp-faucet</code> command and
+        <code>@bcptechnologies/tgbp-kit/faucet</code>. It sends 10 test tGBP once a day per address.
+      </li>
+      <li>
+        x402 payments run through the spend policy. The <code>x402</code> action, the caps and the
+        daily spend ledger now cover them.
+      </li>
+    </ul>
+
+    <h2>tgbp-kit 0.1.0 for Python, 27 October 2026</h2>
+    <ul>
+      <li>
+        First release: a typed Python client for the tGBP mint, redeem and swap API. Install it
+        with <code>pip install tgbp-kit</code>.
+      </li>
+    </ul>
+
+    <h2>@bcptechnologies/tgbp-kit 0.2.1, 26 October 2026</h2>
+    <ul>
+      <li>The token registry lists test tGBP on Base Sepolia: <code>getEvmToken('base-sepolia')</code>.</li>
+    </ul>
+
+    <h2>@bcptechnologies/tgbp-kit 0.1.2, 23 October 2026</h2>
+    <ul>
+      <li>
+        First release on npm: the token registry, balances, transfers and watchers on EVM chains
+        and Solana, the typed client for the mint, redeem and swap API, the <code>tgbp-mcp</code>
+        server and agent skills behind a client-side spend policy, and x402 helpers for Base
+        Sepolia.
+      </li>
+    </ul>
+  </main>
+  <footer>
+    Tokenised GBP is issued by BCP Technologies Ltd.
+    <a href="https://www.tokenisedgbp.com">tokenisedgbp.com</a> ·
+    <a href="https://www.tokenisedgbp.com/.well-known/security.txt">Report a vulnerability</a> ·
+    <a href="/releases">Release notes</a> ·
+    <a href="/fees">Fees</a> ·
+    <a href="/llms.txt">llms.txt</a>
+  </footer>
+</body>
+</html>
