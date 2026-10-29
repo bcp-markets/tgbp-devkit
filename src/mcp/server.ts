@@ -60,6 +60,8 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
 
   const approver: Approver = async (request, signal) => {
+    // The server has no x402 tool, so only a redemption ever asks.
+    if (request.action !== 'redeem') return false
     if (!server.server.getClientCapabilities()?.elicitation) return false
     const result = await server.server.elicitInput(
       {

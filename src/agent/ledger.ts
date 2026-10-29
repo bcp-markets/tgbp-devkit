@@ -26,9 +26,13 @@ export interface LedgerEntry {
   pence?: string
   /** x402 payments only: why the agent paid. */
   reason?: string
+  /** x402 payments only: the policy's `x402.services` match the URL paid. */
+  service?: string
+  /** x402 payments only: the budget the payment spent from. */
+  category?: string
 }
 
-export type ReserveResult = { ok: true } | { ok: false; spent: bigint }
+export type ReserveResult<R> = { ok: true } | { ok: false; refusal: R }
 
 const LOCK_WAIT_MS = 5_000
 const LOCK_RETRY_MS = 25
@@ -45,19 +49,23 @@ export class SpendLedger {
 
   /** What the ledger records as spent on `day`, at `POLICY_DECIMALS`. Throws if it cannot be read. */
   async spentOn(day: string): Promise<bigint> {
-    return sumDay(await this.read(), day)
+    return sumDay(await this.entries(), day)
   }
 
   /**
-   * Record `entry` if it keeps `entry.day` within `cap`. The read, the check
-   * and the append run under a lock file, so two processes sharing a ledger
-   * cannot both spend the last of the cap. The append is synced to disk
-   * before this resolves, so a crash after it cannot lose the record.
+   * Record `entry` unless `refuse` returns a refusal for the entries already
+   * recorded. The read, the check and the append run under a lock file, so
+   * two processes sharing a ledger cannot both spend the last of a cap. The
+   * append is synced to disk before this resolves, so a crash after it cannot
+   * lose the record.
    */
-  async reserve(entry: LedgerEntry, cap: bigint): Promise<ReserveResult> {
+  async reserve<R>(
+    entry: LedgerEntry,
+    refuse: (entries: LedgerEntry[]) => R | undefined,
+  ): Promise<ReserveResult<R>> {
     return this.withLock(async () => {
-      const spent = sumDay(await this.read(), entry.day)
-      if (spent + toPolicyUnits(entry.amount) > cap) return { ok: false, spent }
+      const refusal = refuse(await this.entries())
+      if (refusal !== undefined) return { ok: false, refusal }
       const handle = await open(this.path, 'a', 0o600)
       let created: boolean
       try {
@@ -73,7 +81,8 @@ export class SpendLedger {
     })
   }
 
-  private async read(): Promise<LedgerEntry[]> {
+  /** Every entry, oldest first. Throws if the ledger cannot be read. */
+  async entries(): Promise<LedgerEntry[]> {
     let text: string
     try {
       text = await readFile(this.path, 'utf8')
@@ -135,7 +144,8 @@ export function utcDay(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-function sumDay(entries: LedgerEntry[], day: string): bigint {
+/** What `entries` spent on `day`, at `POLICY_DECIMALS`. */
+export function sumDay(entries: LedgerEntry[], day: string): bigint {
   return entries
     .filter((entry) => entry.day === day)
     .reduce((total, entry) => total + toPolicyUnits(entry.amount), 0n)
@@ -148,8 +158,15 @@ function parseEntry(line: string, lineNumber: number, path: string): LedgerEntry
   } catch (error) {
     throw new Error(`${path}:${lineNumber} is not valid JSON`, { cause: error })
   }
-  const { day, amount } = (entry ?? {}) as Partial<LedgerEntry>
-  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day) || typeof amount !== 'string') {
+  const { at, day, amount } = (entry ?? {}) as Partial<LedgerEntry>
+  if (
+    typeof at !== 'string' ||
+    // A time that does not parse would drop out of every rolling window.
+    Number.isNaN(Date.parse(at)) ||
+    typeof day !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
+    typeof amount !== 'string'
+  ) {
     throw new Error(`${path}:${lineNumber} is not a ledger entry`)
   }
   try {

@@ -10,4 +10,6 @@ export {
   SPEND_ACTIONS,
   type SpendAction,
   type SpendPolicy,
+  type X402Rules,
+  type X402Service,
 } from './policy.js'

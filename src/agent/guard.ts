@@ -8,16 +8,22 @@
  */
 import { formatAmount } from '../amount.js'
 import { TgbpKitError } from '../errors.js'
-import { type LedgerEntry, SpendLedger, utcDay } from './ledger.js'
+import { type LedgerEntry, type ReserveResult, SpendLedger, sumDay, utcDay } from './ledger.js'
 import {
+  matchService,
   POLICY_DECIMALS,
   type SpendAction,
   type SpendPolicy,
   sameDestination,
   toPolicyUnits,
+  type X402Service,
 } from './policy.js'
 
-/** The policy field that refused an action, or `ledger` when the spend ledger failed. */
+/**
+ * The rule that refused an action: a policy field, `firstPayment` when nobody
+ * approved the first payment to an x402 service, or `ledger` when the spend
+ * ledger failed.
+ */
 export type SpendPolicyRule =
   | 'expiresAt'
   | 'actions'
@@ -26,6 +32,10 @@ export type SpendPolicyRule =
   | 'perTransferCap'
   | 'dailyCap'
   | 'redemptionApprovalAbove'
+  | 'services'
+  | 'categoryBudgets'
+  | 'paymentsPerMinute'
+  | 'firstPayment'
   | 'ledger'
 
 export type SpendRequest =
@@ -51,14 +61,27 @@ export type SpendRequest =
       reason: string
     }
 
-export interface ApprovalRequest {
-  action: 'redeem'
-  chain: string
-  destination: string
-  amount: string
-  /** The policy's `redemptionApprovalAbove`. */
-  threshold: string
-}
+export type ApprovalRequest =
+  | {
+      action: 'redeem'
+      chain: string
+      destination: string
+      amount: string
+      /** The policy's `redemptionApprovalAbove`. */
+      threshold: string
+    }
+  | {
+      /** The first x402 payment to a service. Once one is recorded, the budgets alone decide. */
+      action: 'x402'
+      chain: string
+      destination: string
+      amount: string
+      url: string
+      reason: string
+      /** The `x402.services` match the URL falls under. */
+      service: string
+      category: string
+    }
 
 /**
  * Asks a human to approve an action. Resolve `true` only on an explicit yes.
@@ -71,7 +94,10 @@ export interface SpendGuardOptions {
   policy: SpendPolicy
   /** The append-only spend ledger for this policy. */
   ledgerPath: string
-  /** Without one, every redemption above the approval threshold is refused. */
+  /**
+   * Without one, every redemption above the approval threshold, and every
+   * first x402 payment to a service, is refused.
+   */
   approver?: Approver
   /** How long to wait for a human before refusing. Default 5 minutes. */
   approvalTimeoutMs?: number
@@ -107,6 +133,9 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000
 /** The longest x402 `reason` the ledger accepts, in characters. */
 export const MAX_REASON_LENGTH = 500
 
+const MINUTE_MS = 60_000
+const DAY_MS = 24 * 60 * MINUTE_MS
+
 export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
   const { policy } = options
   const ledger = new SpendLedger(options.ledgerPath, options.ledgerLockWaitMs)
@@ -116,6 +145,12 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
   const perTransferCap = toPolicyUnits(policy.perTransferCap)
   const dailyCap = toPolicyUnits(policy.dailyCap)
   const approvalAbove = toPolicyUnits(policy.redemptionApprovalAbove)
+  const categoryBudgets = new Map(
+    Object.entries(policy.x402?.categoryBudgets ?? {}).map(([category, pounds]) => [
+      category,
+      toPolicyUnits(pounds),
+    ]),
+  )
 
   function checkExpiry(request: SpendRequest): void {
     if (now().getTime() >= expiresAt) {
@@ -123,12 +158,54 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     }
   }
 
-  async function spentToday(request: SpendRequest): Promise<bigint> {
+  async function readLedger(request: SpendRequest): Promise<LedgerEntry[]> {
     try {
-      return await ledger.spentOn(utcDay(now()))
+      return await ledger.entries()
     } catch (error) {
       throw ledgerDenied(ledger.path, request, error)
     }
+  }
+
+  /** The cap or budget `amount` would break, given what `entries` already spent. */
+  function overLimit(
+    request: SpendRequest,
+    amount: bigint,
+    service: X402Service | undefined,
+    entries: LedgerEntry[],
+  ): TgbpKitError | undefined {
+    const at = now()
+    const spent = sumDay(entries, utcDay(at))
+    if (spent + amount > dailyCap) return dailyCapDenied(request, spent)
+    if (service === undefined) return undefined
+
+    const budget = categoryBudgets.get(service.category)
+    if (budget === undefined) {
+      return denied('categoryBudgets', `category "${service.category}" has no budget`, request)
+    }
+    // Rolling windows. An entry dated in the future still counts, so a skewed clock overstates.
+    const x402Since = (ms: number) =>
+      entries.filter((entry) => entry.action === 'x402' && Date.parse(entry.at) > at.getTime() - ms)
+    const categorySpent = x402Since(DAY_MS)
+      .filter((entry) => entry.category === service.category)
+      .reduce((total, entry) => total + toPolicyUnits(entry.amount), 0n)
+    if (categorySpent + amount > budget) {
+      const spentText = formatAmount(categorySpent, POLICY_DECIMALS)
+      return denied(
+        'categoryBudgets',
+        `${formatAmount(amount, POLICY_DECIMALS)} would take "${service.category}" over its budget of ${formatAmount(budget, POLICY_DECIMALS)} in 24 hours (${spentText} already spent)`,
+        request,
+        { category: service.category, spentInCategory: spentText },
+      )
+    }
+    const limit = policy.x402?.paymentsPerMinute ?? 0
+    if (x402Since(MINUTE_MS).length >= limit) {
+      return denied(
+        'paymentsPerMinute',
+        `the spend policy allows ${limit} x402 payments a minute`,
+        request,
+      )
+    }
+    return undefined
   }
 
   async function authorize(request: SpendRequest): Promise<void> {
@@ -153,6 +230,13 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     if (!policy.destinations.some((allowed) => sameDestination(allowed, destination))) {
       throw denied('destinations', `"${destination}" is not an allowed destination`, request)
     }
+    let service: X402Service | undefined
+    if (request.action === 'x402') {
+      service = policy.x402 && matchService(policy.x402.services, request.url)
+      if (service === undefined) {
+        throw denied('services', `${request.url} is not an approved x402 service`, request)
+      }
+    }
     const amount = toPolicyUnits(request.amount)
     if (amount <= 0n) throw new RangeError('amount must be greater than zero')
     if (amount > perTransferCap) {
@@ -162,9 +246,10 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
         request,
       )
     }
-    // Check the daily cap before asking a human, so nobody approves an action that would fail.
-    const spent = await spentToday(request)
-    if (spent + amount > dailyCap) throw dailyCapDenied(request, spent)
+    // Check the caps before asking a human, so nobody approves an action that would fail.
+    const entries = await readLedger(request)
+    const limited = overLimit(request, amount, service, entries)
+    if (limited) throw limited
 
     if (request.action === 'redeem' && amount > approvalAbove) {
       const { approved, approverError } = await waitForApproval({
@@ -186,6 +271,33 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
       checkExpiry(request)
     }
 
+    // A service the ledger has paid before was approved then; the budgets decide from here.
+    if (
+      request.action === 'x402' &&
+      service !== undefined &&
+      !entries.some((entry) => entry.action === 'x402' && entry.service === service.match)
+    ) {
+      const { approved, approverError } = await waitForApproval({
+        action: 'x402',
+        chain: request.chain,
+        destination,
+        amount: request.amount,
+        url: request.url,
+        reason: request.reason,
+        service: service.match,
+        category: service.category,
+      })
+      if (!approved) {
+        throw denied(
+          'firstPayment',
+          `approval required: the first payment to "${service.match}" needs the owner's approval, and none was given`,
+          request,
+          { service: service.match, ...(approverError ? { approverError } : {}) },
+        )
+      }
+      checkExpiry(request)
+    }
+
     const at = now()
     const entry: LedgerEntry = {
       at: at.toISOString(),
@@ -199,16 +311,20 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
             url: request.url,
             pence: formatAmount(amount, POLICY_DECIMALS - 2),
             reason: request.reason,
+            ...(service ? { service: service.match, category: service.category } : {}),
           }
         : {}),
     }
-    let result: Awaited<ReturnType<SpendLedger['reserve']>>
+    let result: ReserveResult<TgbpKitError>
     try {
-      result = await ledger.reserve(entry, dailyCap)
+      // Again under the ledger lock: another process may have spent since the check above.
+      result = await ledger.reserve(entry, (recorded) =>
+        overLimit(request, amount, service, recorded),
+      )
     } catch (error) {
       throw ledgerDenied(ledger.path, request, error)
     }
-    if (!result.ok) throw dailyCapDenied(request, result.spent)
+    if (!result.ok) throw result.refusal
   }
 
   async function waitForApproval(

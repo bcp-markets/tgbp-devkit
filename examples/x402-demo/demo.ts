@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import express from 'express'
 import {
   createPublicClient,
@@ -141,6 +142,12 @@ interface Paid {
   hash: string | undefined
 }
 
+/** The demo stands in for the owner, who must approve the first payment to a service. */
+async function approveFirstPayment(): Promise<boolean> {
+  console.log('Approving the first payment to the quote service')
+  return true
+}
+
 /** Pays for `url` with the payment fetch, or with `--mcp` through the MCP server's `tgbp_x402_pay`. */
 async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Promise<Paid> {
   const reason = 'a sterling quote'
@@ -149,7 +156,7 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
       publicClient,
       walletClient,
       maxPencePerRequest: PENCE,
-      guard: createSpendGuard({ policy, ledgerPath }),
+      guard: createSpendGuard({ policy, ledgerPath, approver: approveFirstPayment }),
     })
     const { response, settlement } = await pay(url, undefined, { reason })
     return { status: response.status, body: await response.text(), hash: settlement?.transaction }
@@ -159,7 +166,12 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
     ledgerPath,
     evm: () => ({ publicClient, walletClient }),
   })
-  const client = new Client({ name: 'x402-demo', version: '0' })
+  // The server asks the owner through the MCP client before the first payment to a service.
+  const client = new Client({ name: 'x402-demo', version: '0' }, { capabilities: { elicitation: {} } })
+  client.setRequestHandler(ElicitRequestSchema, async () => ({
+    action: 'accept',
+    content: { approve: await approveFirstPayment() },
+  }))
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
   await Promise.all([server.connect(serverSide), client.connect(clientSide)])
   try {
@@ -210,7 +222,7 @@ async function main(): Promise<void> {
   })
   const { port } = server.address() as AddressInfo
 
-  // A spend policy for this run only: one 5p x402 payment to the payee, today.
+  // A spend policy for this run only: one 5p x402 payment to the local quote service, today.
   const policy: SpendPolicy = {
     version: 1,
     expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
@@ -220,6 +232,11 @@ async function main(): Promise<void> {
     perTransferCap: formatAmount(price, token.decimals),
     dailyCap: formatAmount(price, token.decimals),
     redemptionApprovalAbove: '0',
+    x402: {
+      services: [{ match: `http://127.0.0.1:${port}/quote`, category: 'quotes' }],
+      categoryBudgets: { quotes: formatAmount(price, token.decimals) },
+      paymentsPerMinute: 1,
+    },
   }
   const ledgerPath = join(ledgerDir, 'ledger.jsonl')
 
