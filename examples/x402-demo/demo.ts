@@ -5,6 +5,7 @@
  *
  *   pnpm x402:demo --fund-from <foundry keystore account>
  *   pnpm x402:demo --pay-to <address>        # fund the printed payer yourself
+ *   pnpm x402:demo --pay-to <address> --mcp  # pay through the MCP server's tgbp_x402_pay
  *
  * The payer is a fresh key made in memory for this run and never written down.
  * With `--fund-from`, `cast` sends it 5p from that keystore (it asks for the
@@ -16,6 +17,8 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import express from 'express'
 import {
   createPublicClient,
@@ -30,8 +33,10 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
 
 import { createSpendGuard } from '../../src/agent/guard.js'
+import type { SpendPolicy } from '../../src/agent/policy.js'
 import { formatAmount } from '../../src/amount.js'
 import { tgbpAbi } from '../../src/evm/abi.js'
+import { createTgbpMcpServer } from '../../src/mcp/server.js'
 import { createTgbpPaymentFetch } from '../../src/x402/client.js'
 import {
   penceToBaseUnits,
@@ -45,7 +50,11 @@ const price = penceToBaseUnits(PENCE, token)
 const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL ?? 'https://sepolia.base.org'
 
 const { values } = parseArgs({
-  options: { 'fund-from': { type: 'string' }, 'pay-to': { type: 'string' } },
+  options: {
+    'fund-from': { type: 'string' },
+    'pay-to': { type: 'string' },
+    mcp: { type: 'boolean' },
+  },
 })
 
 // No `chain`: Base Sepolia's OP-stack formatters give a client type the kit's `PublicClient` does not accept, and reads need none.
@@ -126,6 +135,52 @@ async function waitForFunding(): Promise<void> {
   throw new Error('the payer was not funded within 15 minutes')
 }
 
+interface Paid {
+  status: number
+  body: string
+  hash: string | undefined
+}
+
+/** Pays for `url` with the payment fetch, or with `--mcp` through the MCP server's `tgbp_x402_pay`. */
+async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Promise<Paid> {
+  const reason = 'a sterling quote'
+  if (!values.mcp) {
+    const pay = createTgbpPaymentFetch({
+      publicClient,
+      walletClient,
+      maxPencePerRequest: PENCE,
+      guard: createSpendGuard({ policy, ledgerPath }),
+    })
+    const { response, settlement } = await pay(url, undefined, { reason })
+    return { status: response.status, body: await response.text(), hash: settlement?.transaction }
+  }
+  const server = createTgbpMcpServer({
+    policy,
+    ledgerPath,
+    evm: () => ({ publicClient, walletClient }),
+  })
+  const client = new Client({ name: 'x402-demo', version: '0' })
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+  await Promise.all([server.connect(serverSide), client.connect(clientSide)])
+  try {
+    const result = await client.callTool({
+      name: 'tgbp_x402_pay',
+      arguments: { url, maxPence: PENCE, reason },
+    })
+    const text = (result.content as { type: string; text: string }[])[0]?.text ?? ''
+    if (result.isError) throw new Error(`tgbp_x402_pay failed: ${text}`)
+    const paid = JSON.parse(text) as {
+      status: number
+      body: string
+      paid?: { transaction?: string }
+    }
+    console.log('tgbp_x402_pay result:', text)
+    return { status: paid.status, body: paid.body, hash: paid.paid?.transaction }
+  } finally {
+    await client.close()
+  }
+}
+
 async function main(): Promise<void> {
   const fundFrom = values['fund-from']
   const payToArg = values['pay-to']
@@ -156,34 +211,27 @@ async function main(): Promise<void> {
   const { port } = server.address() as AddressInfo
 
   // A spend policy for this run only: one 5p x402 payment to the payee, today.
-  const guard = createSpendGuard({
-    policy: {
-      version: 1,
-      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
-      actions: ['x402'],
-      chains: [token.chain],
-      destinations: [payTo],
-      perTransferCap: formatAmount(price, token.decimals),
-      dailyCap: formatAmount(price, token.decimals),
-      redemptionApprovalAbove: '0',
-    },
-    ledgerPath: join(ledgerDir, 'ledger.jsonl'),
-  })
+  const policy: SpendPolicy = {
+    version: 1,
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    actions: ['x402'],
+    chains: [token.chain],
+    destinations: [payTo],
+    perTransferCap: formatAmount(price, token.decimals),
+    dailyCap: formatAmount(price, token.decimals),
+    redemptionApprovalAbove: '0',
+  }
+  const ledgerPath = join(ledgerDir, 'ledger.jsonl')
 
   try {
-    const pay = createTgbpPaymentFetch({
-      publicClient,
-      walletClient,
-      maxPencePerRequest: PENCE,
-      guard,
-    })
-    const { response, settlement } = await pay(`http://127.0.0.1:${port}/quote`, undefined, {
-      reason: 'a sterling quote',
-    })
-    const hash = settlement?.transaction
+    const { status, body, hash } = await payFor(
+      `http://127.0.0.1:${port}/quote`,
+      policy,
+      ledgerPath,
+    )
     console.log(`Settlement: ${token.explorerUrl}/tx/${hash}`)
-    console.log(`API response ${response.status}:`, await response.text())
-    check(response.status === 200, 'the paid request got the API response')
+    console.log(`API response ${status}:`, body)
+    check(status === 200, 'the paid request got the API response')
     if (hash === undefined || !isHash(hash)) {
       check(false, 'the facilitator reported a transaction hash')
       return
@@ -208,7 +256,7 @@ async function main(): Promise<void> {
       'the payer still holds 0 ETH: the facilitator paid the gas',
     )
     check(
-      (await guard.budget()).remaining === '0',
+      (await createSpendGuard({ policy, ledgerPath }).budget()).remaining === '0',
       'the spend ledger counted the payment against the daily cap',
     )
   } finally {

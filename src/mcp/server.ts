@@ -1,6 +1,6 @@
 /**
- * An MCP server that gives an agent tGBP tools, every one of them behind the
- * spend policy. A redemption above the approval threshold asks the human
+ * An MCP server that gives an agent tGBP tools, every one that moves value
+ * behind the spend policy. A redemption above the approval threshold asks the human
  * through the MCP client (elicitation). A client that cannot ask, a "no", and
  * no answer before the timeout all refuse it.
  */
@@ -9,10 +9,19 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
 import { type AgentActionsOptions, createAgentActions } from '../agent/actions.js'
-import { type Approver, createSpendGuard, DEFAULT_APPROVAL_TIMEOUT_MS } from '../agent/guard.js'
+import {
+  type Approver,
+  createSpendGuard,
+  DEFAULT_APPROVAL_TIMEOUT_MS,
+  MAX_REASON_LENGTH,
+} from '../agent/guard.js'
 import type { SpendPolicy } from '../agent/policy.js'
+import { formatAmount } from '../amount.js'
 import { isTgbpKitError } from '../errors.js'
 import { KIT_VERSION } from '../version.js'
+
+type X402Client = typeof import('../x402/client.js')
+type PaymentFetch = ReturnType<X402Client['createTgbpPaymentFetch']>
 
 export interface TgbpMcpServerOptions extends Omit<AgentActionsOptions, 'guard'> {
   policy: SpendPolicy
@@ -33,6 +42,11 @@ const idempotencyKey = text()
   .describe(
     'To retry an earlier attempt, pass its idempotencyKey; never for a new one. A retry counts against the caps again.',
   )
+
+/** The most `tgbp_x402_pay` accepts as `maxPence`; the spend policy's caps still apply below it. */
+const MAX_X402_PENCE = 100_000
+/** How much of a paid service's response the tool returns into the agent's context. */
+const MAX_X402_BODY_CHARS = 20_000
 
 export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const server = new McpServer({ name: 'tgbp', version: KIT_VERSION })
@@ -155,7 +169,112 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     (args) => run(() => actions.swap(args)),
   )
 
+  // One payment fetch for the server: it pays one payment at a time, because
+  // two signed at once would share a permit nonce.
+  let paymentFetch: Promise<PaymentFetch> | undefined
+  function x402PaymentFetch(): Promise<PaymentFetch> {
+    paymentFetch ??= (async () => {
+      const x402 = await loadX402()
+      if (!options.evm) throw new Error('No EVM wallet is configured')
+      const { publicClient, walletClient } = options.evm(x402.TGBP_BASE_SEPOLIA)
+      return x402.createTgbpPaymentFetch({
+        publicClient,
+        walletClient,
+        maxPencePerRequest: MAX_X402_PENCE,
+        guard,
+      })
+    })()
+    // A failed setup is not cached, so the next call can try again.
+    paymentFetch.catch(() => {
+      paymentFetch = undefined
+    })
+    return paymentFetch
+  }
+
+  server.registerTool(
+    'tgbp_x402_pay',
+    {
+      title: 'Pay an x402 URL in tGBP',
+      description:
+        "GET a URL that charges over x402 and pay it in tGBP on Base Sepolia from this agent's wallet, then return the service's response. A price above maxPence is refused without signing. Pass estimate: true to read the price and pay nothing. A payment counts against the per-transfer and daily caps, and the payee must be an allowed destination.",
+      inputSchema: {
+        url: z
+          .url({ protocol: /^https?$/ })
+          .max(2000)
+          .describe('The paid URL'),
+        maxPence: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_X402_PENCE)
+          .describe('The most to pay, in whole pence'),
+        estimate: z.boolean().optional().describe('Return the price and pay nothing'),
+        reason: z
+          .string()
+          .max(MAX_REASON_LENGTH)
+          .optional()
+          .describe('Why you are paying; the spend ledger records it. Needed to pay.'),
+      },
+      annotations: { destructiveHint: true, openWorldHint: true },
+    },
+    ({ url, maxPence, estimate, reason }) =>
+      run(async () => {
+        if (estimate) {
+          const x402 = await loadX402()
+          const quote = await x402.quoteTgbpPayment(url)
+          if (quote.free) return { estimate: true, ...quote }
+          const token = x402.TGBP_BASE_SEPOLIA
+          return {
+            estimate: true,
+            free: false,
+            url: quote.url,
+            amount: formatAmount(quote.amount, token.decimals),
+            payTo: quote.payTo,
+            network: quote.network,
+            maxPence,
+            withinMax: quote.amount <= x402.penceToBaseUnits(maxPence, token),
+          }
+        }
+        if (reason === undefined || reason.trim() === '') {
+          throw new RangeError('Pass a reason: the spend ledger records why each payment was made')
+        }
+        const { decimals } = (await loadX402()).TGBP_BASE_SEPOLIA
+        const pay = await x402PaymentFetch()
+        const paid = await pay(url, undefined, { reason, maxPence })
+        const text = await paid.response.text()
+        return {
+          url,
+          status: paid.response.status,
+          contentType: paid.response.headers.get('content-type'),
+          body: text.slice(0, MAX_X402_BODY_CHARS),
+          truncated: text.length > MAX_X402_BODY_CHARS,
+          paid:
+            paid.settlement && paid.amount !== undefined
+              ? {
+                  amount: formatAmount(paid.amount, decimals),
+                  payTo: paid.payTo,
+                  transaction: paid.settlement.transaction,
+                  network: paid.settlement.network,
+                }
+              : null,
+        }
+      }),
+  )
+
   return server
+}
+
+/** The x402 packages are optional peers, so the client loads on first use. */
+async function loadX402(): Promise<X402Client> {
+  try {
+    return await import('../x402/client.js')
+  } catch (cause) {
+    if ((cause as { code?: unknown }).code !== 'ERR_MODULE_NOT_FOUND') throw cause
+    throw new Error(
+      'tgbp_x402_pay needs @x402/core and @x402/evm; install them, or add -p @x402/core@2 -p @x402/evm@2 to the npx line',
+      { cause },
+    )
+  }
 }
 
 async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {

@@ -7,7 +7,14 @@ import type {
 } from '@x402/core/types'
 import { type ClientEvmSigner, PERMIT2_ADDRESS } from '@x402/evm'
 import { ExactEvmScheme } from '@x402/evm/exact/client'
-import { getAddress, isAddress, type PublicClient, type WalletClient, zeroAddress } from 'viem'
+import {
+  type Address,
+  getAddress,
+  isAddress,
+  type PublicClient,
+  type WalletClient,
+  zeroAddress,
+} from 'viem'
 
 import type { SpendGuard } from '../agent/guard.js'
 import { formatAmount } from '../amount.js'
@@ -55,6 +62,8 @@ export interface TgbpPaymentContext {
    * ledger records it. Every call needs one.
    */
   reason: string
+  /** Lowers `maxPencePerRequest` for this call only, in whole pence. */
+  maxPence?: number | bigint
 }
 
 export interface TgbpPaidResponse {
@@ -66,6 +75,10 @@ export interface TgbpPaidResponse {
    * was free.
    */
   settlement?: SettleResponse
+  /** The price paid, in tGBP base units. Undefined when the route was free. */
+  amount?: bigint
+  /** Who was paid. Undefined when the route was free. */
+  payTo?: Address
 }
 
 /**
@@ -79,7 +92,7 @@ export interface TgbpPaidResponse {
  * and payee, and the payer's balance, and throws a `TgbpKitError` without
  * signing when one fails. These checks are best effort: the state can change
  * before the facilitator settles. It refuses a price above
- * `maxPencePerRequest`, and an offer whose signature would stay valid longer
+ * `maxPencePerRequest` or the call's `payment.maxPence`, and an offer whose signature would stay valid longer
  * than `MAX_PAYMENT_WINDOW_SECONDS`.
  *
  * Last before signing, it asks `guard`, which refuses with
@@ -142,37 +155,21 @@ export function createTgbpPaymentFetch({
     if (typeof payment?.reason !== 'string' || payment.reason.trim() === '') {
       throw new RangeError('Pass { reason } as the third argument; the spend ledger records it')
     }
+    const callLimit =
+      payment.maxPence === undefined
+        ? limit
+        : minBigInt(limit, penceToBaseUnits(payment.maxPence, token))
     const request = new Request(input, init)
     const first = await fetchFn(request.clone())
     if (first.status !== 402) return { response: first }
 
-    const url = first.url || request.url
-    if (new URL(url).origin !== new URL(request.url).origin) {
-      throw new TgbpKitError(
-        'PAYMENT_NOT_OFFERED',
-        `${request.url} redirected to ${url}, which asked for payment; the client pays only the origin it called`,
-        { details: { url: request.url, redirectedTo: url } },
-      )
-    }
-    let paymentRequired: PaymentRequired
-    try {
-      paymentRequired = http.getPaymentRequiredResponse(
-        (name) => first.headers.get(name),
-        await readJson(first),
-      )
-    } catch (cause) {
-      throw new TgbpKitError('PAYMENT_NOT_OFFERED', `${url} answered 402 without x402 terms`, {
-        cause,
-        details: { url },
-      })
-    }
-    const offer = pickTgbpOffer(paymentRequired, token, network, url)
+    const { url, paymentRequired, offer } = await readTerms(first, request, http, token, network)
     const amount = BigInt(offer.amount)
-    if (amount > limit) {
+    if (amount > callLimit) {
       throw new TgbpKitError(
         'PAYMENT_OVER_LIMIT',
-        `${url} asks ${amount} tGBP base units, above the limit of ${limit}`,
-        { details: { url, amount, limit } },
+        `${url} asks ${amount} tGBP base units, above the limit of ${callLimit}`,
+        { details: { url, amount, limit: callLimit } },
       )
     }
     const payTo = getAddress(offer.payTo)
@@ -285,7 +282,7 @@ export function createTgbpPaymentFetch({
         undefined,
       )
     }
-    return { response, settlement }
+    return { response, settlement, amount, payTo }
   }
 
   let queue: Promise<unknown> = Promise.resolve()
@@ -298,6 +295,80 @@ export function createTgbpPaymentFetch({
     )
     return result
   }
+}
+
+export interface TgbpPaymentQuoteOptions {
+  /** Defaults to tGBP on Base Sepolia. */
+  token?: EvmTokenDeployment
+  /** Defaults to the global `fetch`. */
+  fetch?: typeof fetch
+}
+
+/** What an x402 route asks for, from `quoteTgbpPayment`. */
+export type TgbpPaymentQuote =
+  | { free: true; url: string; status: number }
+  | {
+      free: false
+      /** The URL that asked for payment. */
+      url: string
+      /** The price, in tGBP base units. */
+      amount: bigint
+      payTo: Address
+      network: string
+    }
+
+/**
+ * Reads the price of an x402 route without paying it: it sends the request
+ * once, and on a 402 picks the server's tGBP offer by the same rules as
+ * `createTgbpPaymentFetch`. It signs nothing and asks no spend guard. A route
+ * that does not answer 402 is free; its response is discarded.
+ */
+export async function quoteTgbpPayment(
+  input: string | URL | Request,
+  init?: RequestInit,
+  { token = TGBP_BASE_SEPOLIA, fetch: fetchFn = globalThis.fetch }: TgbpPaymentQuoteOptions = {},
+): Promise<TgbpPaymentQuote> {
+  const request = new Request(input, init)
+  const first = await fetchFn(request)
+  if (first.status !== 402) {
+    await first.body?.cancel()
+    return { free: true, url: first.url || request.url, status: first.status }
+  }
+  const network = x402Network(token)
+  const http = new x402HTTPClient(new x402Client())
+  const { url, offer } = await readTerms(first, request, http, token, network)
+  return { free: false, url, amount: BigInt(offer.amount), payTo: getAddress(offer.payTo), network }
+}
+
+/** The x402 terms of a 402 answer to `request`, and the tGBP offer the client accepts. */
+async function readTerms(
+  first: Response,
+  request: Request,
+  http: x402HTTPClient,
+  token: EvmTokenDeployment,
+  network: string,
+): Promise<{ url: string; paymentRequired: PaymentRequired; offer: PaymentRequirements }> {
+  const url = first.url || request.url
+  if (new URL(url).origin !== new URL(request.url).origin) {
+    throw new TgbpKitError(
+      'PAYMENT_NOT_OFFERED',
+      `${request.url} redirected to ${url}, which asked for payment; the client pays only the origin it called`,
+      { details: { url: request.url, redirectedTo: url } },
+    )
+  }
+  let paymentRequired: PaymentRequired
+  try {
+    paymentRequired = http.getPaymentRequiredResponse(
+      (name) => first.headers.get(name),
+      await readJson(first),
+    )
+  } catch (cause) {
+    throw new TgbpKitError('PAYMENT_NOT_OFFERED', `${url} answered 402 without x402 terms`, {
+      cause,
+      details: { url },
+    })
+  }
+  return { url, paymentRequired, offer: pickTgbpOffer(paymentRequired, token, network, url) }
 }
 
 function pickTgbpOffer(
@@ -361,6 +432,10 @@ function unconfirmed(
     `${message}; the signed payment may still settle until its deadline, so check the payer's balance before retrying`,
     { cause, details },
   )
+}
+
+function minBigInt(a: bigint, b: bigint): bigint {
+  return a < b ? a : b
 }
 
 /** Caps a server-supplied reason, which lands in logs and in an agent's context. */

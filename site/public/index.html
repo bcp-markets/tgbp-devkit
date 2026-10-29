@@ -75,7 +75,7 @@
         </tr>
         <tr>
           <td><code>@bcptechnologies/tgbp-kit/agent</code>, <code>tgbp-mcp</code></td>
-          <td>An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP, inside a spend policy you write.</td>
+          <td>An MCP server and agent skills that let an LLM agent send, mint, redeem and swap tGBP and pay x402 URLs, inside a spend policy you write.</td>
         </tr>
         <tr>
           <td><code>@bcptechnologies/tgbp-kit/x402/server</code>, <code>/client</code></td>
@@ -104,7 +104,7 @@
     <h2>Agents</h2>
     <p>
       <code>tgbp-mcp</code> is an MCP server that lets an LLM agent read balances and send, mint,
-      redeem and swap tGBP. Every tool runs behind a spend policy, a JSON file that refuses any
+      redeem and swap tGBP, and pay x402 URLs in tGBP. Every tool runs behind a spend policy, a JSON file that refuses any
       action it does not allow: by chain, destination, per-transfer cap and daily cap. A large
       redemption waits for a human to approve it. One agent skill per action ships with the
       package.
