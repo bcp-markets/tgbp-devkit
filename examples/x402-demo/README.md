@@ -38,6 +38,18 @@ With `--fund-from`, the keystore needs a little Base Sepolia ETH for that one tr
 payment goes back to the keystore's address. Set `BASE_SEPOLIA_RPC_URL` to use your own RPC
 endpoint instead of `https://sepolia.base.org`.
 
+## On Base mainnet
+
+With `--chain base` the demo pays real tGBP through the facilitator you name, since x402.org
+serves testnets only. Set `BASE_RPC_URL`, and `X402_FACILITATOR_TOKEN` if the facilitator needs a
+bearer token. `--pence` sets the price:
+
+```sh
+pnpm x402:demo --chain base --pence 1 --facilitator <url> --fund-from <foundry keystore account>
+```
+
+[`facilitator/`](../../facilitator/README.md) is the facilitator to run it against.
+
 ## A recorded run
 
 <!-- x402-demo-run -->

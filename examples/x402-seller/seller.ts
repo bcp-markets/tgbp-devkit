@@ -25,17 +25,25 @@ export interface SellerOptions {
   token?: TgbpPaymentMiddlewareOptions['token']
   /** Defaults to the x402.org facilitator. */
   facilitator?: TgbpPaymentMiddlewareOptions['facilitator']
+  /** The price of a quote in whole pence. Defaults to `QUOTE_PENCE`. */
+  pence?: number
 }
 
 /**
- * The seller's Express app: `GET /quote` costs 5p and `GET /health` is free.
+ * The seller's Express app: `GET /quote` costs 5p (or `pence`) and `GET /health` is free.
  *
  * The route's response goes out only after the payment settles. While the
  * facilitator reports the settlement pending, the buyer gets 503 with
  * `Retry-After` and retries with the same payment; a payment that has
  * already bought a quote gets 402.
  */
-export function sellerApp({ payTo, token, facilitator }: SellerOptions): express.Express {
+export function sellerApp({
+  payTo,
+  token,
+  facilitator,
+  pence = QUOTE_PENCE,
+}: SellerOptions): express.Express {
+  const tgbp = token?.network === 'mainnet' ? 'tGBP' : 'test tGBP'
   const app = express()
   app.get('/health', (_req, res) => {
     res.json({ ok: true })
@@ -44,7 +52,7 @@ export function sellerApp({ payTo, token, facilitator }: SellerOptions): express
     tgbpPaymentMiddleware({
       routes: {
         'GET /quote': {
-          pence: QUOTE_PENCE,
+          pence,
           payTo,
           description: 'A sterling quote',
           mimeType: 'application/json',
@@ -55,7 +63,10 @@ export function sellerApp({ payTo, token, facilitator }: SellerOptions): express
     }),
   )
   app.get('/quote', (_req, res) => {
-    res.json({ quote: 'GBP is the currency of the United Kingdom', paidWith: '5p of test tGBP' })
+    res.json({
+      quote: 'GBP is the currency of the United Kingdom',
+      paidWith: `${pence}p of ${tgbp}`,
+    })
   })
   return app
 }

@@ -9,8 +9,13 @@
  *   pnpm x402:demo --pay-to <address> --mcp  # pay through the MCP server's tgbp_x402_pay
  *
  * The payer is a fresh key made in memory for this run and never written down.
- * With `--fund-from`, `cast` sends it 5p from that keystore (it asks for the
- * keystore password) and the payment goes back to the same address.
+ * With `--fund-from`, `cast` sends it the price from that keystore (it asks for
+ * the keystore password) and the payment goes back to the same address.
+ *
+ * On Base mainnet, with real tGBP, it pays through the facilitator you name;
+ * set BASE_RPC_URL, and X402_FACILITATOR_TOKEN if the facilitator needs one:
+ *
+ *   pnpm x402:demo --chain base --pence 1 --facilitator <url> --fund-from <account>
  */
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -21,6 +26,7 @@ import { parseArgs } from 'node:util'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { HTTPFacilitatorClient } from '@x402/core/server'
 import {
   createPublicClient,
   createWalletClient,
@@ -31,34 +37,52 @@ import {
   parseEventLogs,
 } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { baseSepolia } from 'viem/chains'
+import { base, baseSepolia } from 'viem/chains'
 
 import { createSpendGuard } from '../../src/agent/guard.js'
 import type { SpendPolicy } from '../../src/agent/policy.js'
 import { formatAmount } from '../../src/amount.js'
 import { tgbpAbi } from '../../src/evm/abi.js'
 import { createTgbpMcpServer } from '../../src/mcp/server.js'
+import { getEvmToken } from '../../src/registry/index.js'
 import { createTgbpPaymentFetch } from '../../src/x402/client.js'
-import { penceToBaseUnits, TGBP_BASE_SEPOLIA } from '../../src/x402/server.js'
+import { penceToBaseUnits } from '../../src/x402/server.js'
 import { QUOTE_PENCE, sellerApp } from '../x402-seller/seller.js'
-
-const PENCE = QUOTE_PENCE
-const token = TGBP_BASE_SEPOLIA
-const price = penceToBaseUnits(PENCE, token)
-const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL ?? 'https://sepolia.base.org'
 
 const { values } = parseArgs({
   options: {
     'fund-from': { type: 'string' },
     'pay-to': { type: 'string' },
     mcp: { type: 'boolean' },
+    chain: { type: 'string', default: 'base-sepolia' },
+    pence: { type: 'string', default: String(QUOTE_PENCE) },
+    facilitator: { type: 'string' },
   },
 })
 
-// No `chain`: Base Sepolia's OP-stack formatters give a client type the kit's `PublicClient` does not accept, and reads need none.
+if (values.chain !== 'base' && values.chain !== 'base-sepolia') {
+  throw new Error('--chain must be base or base-sepolia')
+}
+const mainnet = values.chain === 'base'
+if (mainnet && values.mcp) throw new Error('--mcp runs on Base Sepolia only')
+const PENCE = Number(values.pence)
+const token = getEvmToken(values.chain)
+const price = penceToBaseUnits(PENCE, token)
+const tgbp = mainnet ? 'tGBP' : 'test tGBP'
+const chainName = mainnet ? 'Base' : 'Base Sepolia'
+const rpcUrl = mainnet
+  ? process.env.BASE_RPC_URL
+  : (process.env.BASE_SEPOLIA_RPC_URL ?? 'https://sepolia.base.org')
+if (!rpcUrl) throw new Error('set BASE_RPC_URL to a Base mainnet RPC endpoint')
+
+// No `chain`: Base's OP-stack formatters give a client type the kit's `PublicClient` does not accept, and reads need none.
 const publicClient = createPublicClient({ transport: http(rpcUrl) })
 const account = privateKeyToAccount(generatePrivateKey())
-const walletClient = createWalletClient({ chain: baseSepolia, transport: http(rpcUrl), account })
+const walletClient = createWalletClient({
+  chain: mainnet ? base : baseSepolia,
+  transport: http(rpcUrl),
+  account,
+})
 const tgbpBalance = (owner: `0x${string}`) =>
   publicClient.readContract({
     address: token.address,
@@ -72,7 +96,18 @@ function check(ok: boolean, message: string): void {
   if (!ok) process.exitCode = 1
 }
 
-/** Sends the payer 5p with `cast`, and returns the sender's address. */
+/** The facilitator named by `--facilitator`, sending X402_FACILITATOR_TOKEN as its bearer token. */
+function facilitatorClient(): HTTPFacilitatorClient | undefined {
+  if (values.facilitator === undefined) return undefined
+  const secret = process.env.X402_FACILITATOR_TOKEN
+  const headers: Record<string, string> = secret ? { Authorization: `Bearer ${secret}` } : {}
+  return new HTTPFacilitatorClient({
+    url: values.facilitator,
+    createAuthHeaders: async () => ({ verify: headers, settle: headers, supported: {} }),
+  })
+}
+
+/** Sends the payer the price with `cast`, and returns the sender's address. */
 async function fundWithCast(keystoreAccount: string): Promise<`0x${string}`> {
   const args = [
     'send',
@@ -119,8 +154,8 @@ async function fundWithCast(keystoreAccount: string): Promise<`0x${string}`> {
 }
 
 async function waitForFunding(): Promise<void> {
-  console.log(`Send ${formatAmount(price, token.decimals)} test tGBP to ${account.address}`)
-  console.log(`  npx -p @bcptechnologies/tgbp-kit tgbp-faucet ${account.address}`)
+  console.log(`Send ${formatAmount(price, token.decimals)} ${tgbp} to ${account.address}`)
+  if (!mainnet) console.log(`  npx -p @bcptechnologies/tgbp-kit tgbp-faucet ${account.address}`)
   const deadline = Date.now() + 15 * 60_000
   while (Date.now() < deadline) {
     try {
@@ -152,6 +187,7 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
     const pay = createTgbpPaymentFetch({
       publicClient,
       walletClient,
+      token,
       maxPencePerRequest: PENCE,
       guard: createSpendGuard({ policy, ledgerPath, approver: approveFirstPayment }),
     })
@@ -196,6 +232,9 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
 async function main(): Promise<void> {
   const fundFrom = values['fund-from']
   const payToArg = values['pay-to']
+  if (fundFrom !== undefined && payToArg !== undefined) {
+    throw new Error('pass --fund-from or --pay-to, not both')
+  }
   if (fundFrom === undefined && (payToArg === undefined || !isAddress(payToArg))) {
     throw new Error('pass --fund-from <keystore account>, or --pay-to <address>')
   }
@@ -208,13 +247,13 @@ async function main(): Promise<void> {
   const payerBefore = await tgbpBalance(account.address)
 
   const ledgerDir = await mkdtemp(join(tmpdir(), 'tgbp-x402-demo-'))
-  const app = sellerApp({ payTo })
+  const app = sellerApp({ payTo, token, facilitator: facilitatorClient(), pence: PENCE })
   const server = await new Promise<ReturnType<typeof app.listen>>((resolve) => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening))
   })
   const { port } = server.address() as AddressInfo
 
-  // A spend policy for this run only: one 5p x402 payment to the local quote service, today.
+  // A spend policy for this run only: one x402 payment of the price to the local quote service, today.
   const policy: SpendPolicy = {
     version: 1,
     expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
@@ -247,7 +286,7 @@ async function main(): Promise<void> {
     }
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash })
-    check(receipt.status === 'success', 'the settlement transaction succeeded on Base Sepolia')
+    check(receipt.status === 'success', `the settlement transaction succeeded on ${chainName}`)
     const transfers = parseEventLogs({ abi: tgbpAbi, eventName: 'Transfer', logs: receipt.logs })
     check(
       transfers.some(
@@ -257,9 +296,12 @@ async function main(): Promise<void> {
           log.args.to === payTo &&
           log.args.value === price,
       ),
-      `the settlement moved exactly 5p of tGBP from the payer to ${payTo}`,
+      `the settlement moved exactly ${PENCE}p of tGBP from the payer to ${payTo}`,
     )
-    check(payerBefore - (await tgbpBalance(account.address)) === price, 'the payer paid 5p, once')
+    check(
+      payerBefore - (await tgbpBalance(account.address)) === price,
+      `the payer paid ${PENCE}p, once`,
+    )
     check(
       (await publicClient.getBalance({ address: account.address })) === 0n,
       'the payer still holds 0 ETH: the facilitator paid the gas',
