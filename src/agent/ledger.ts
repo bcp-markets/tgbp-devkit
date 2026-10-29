@@ -20,6 +20,12 @@ export interface LedgerEntry {
   destination: string
   /** Pounds, as a decimal string. */
   amount: string
+  /** x402 payments only: the URL paid for. */
+  url?: string
+  /** x402 payments only: the price in pence, as a decimal string. */
+  pence?: string
+  /** x402 payments only: why the agent paid. */
+  reason?: string
 }
 
 export type ReserveResult = { ok: true } | { ok: false; spent: bigint }
