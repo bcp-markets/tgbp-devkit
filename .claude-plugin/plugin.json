@@ -1,0 +1,9 @@
+{
+  "name": "tgbp-kit",
+  "description": "Skills that let your agent read balances, send, mint, redeem and swap tGBP, pay x402 URLs in tGBP and charge for an API in tGBP, through the dev kit's tgbp-mcp server and its spend policy.",
+  "author": { "name": "BCP Markets", "email": "support@tgbp.io" },
+  "homepage": "https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy",
+  "repository": "https://github.com/bcp-markets/tgbp-devkit",
+  "license": "MIT",
+  "keywords": ["tgbp", "stablecoin", "x402", "mcp", "agent-payments"]
+}

@@ -29,7 +29,7 @@ Business clients mint and redeem tGBP through the tGBP API. Its full reference i
 
 ## Agents
 
-`tgbp-mcp` is an MCP server that lets an LLM agent read balances and send, mint, redeem and swap tGBP, and pay x402 URLs in tGBP. Every tool runs behind a spend policy, a JSON file that refuses any action it does not allow: by chain, destination, per-transfer cap and daily cap. A large redemption waits for a human to approve it. One agent skill per action ships with the package.
+`tgbp-mcp` is an MCP server that lets an LLM agent read balances and send, mint, redeem and swap tGBP, and pay x402 URLs in tGBP. Every tool runs behind a spend policy, a JSON file that refuses any action it does not allow: by chain, destination, per-transfer cap and daily cap. A large redemption waits for a human to approve it. One agent skill per action ships with the package, and installs in Claude Code as a plugin.
 
 The policy runs inside the server's process. Give the agent the MCP server, never the API key or the wallet key. Setup and every policy field are in the [README](https://github.com/bcp-markets/tgbp-devkit#agents-mcp-server-skills-and-spend-policy).
 

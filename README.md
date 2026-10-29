@@ -325,9 +325,21 @@ on, so run it where that is acceptable.
 ### Skills
 
 `skills/` holds an agent skill for each action (`tgbp-balance`, `tgbp-transfer`, `tgbp-mint`,
-`tgbp-redeem`, `tgbp-swap`). Each one tells the agent how to use the tool, and what to do when the
-policy refuses: report the rule and stop. Copy them into your agent's skills directory. They
-ship in the npm package too.
+`tgbp-redeem`, `tgbp-swap`, `tgbp-x402-pay`). Each one tells the agent how to use the tool, and what
+to do when the policy refuses: report the rule and stop. `tgbp-x402-charge` tells it how to price
+an Express route in pence of tGBP with the [x402 middleware](#x402-payments-base-sepolia). Every
+example runs on testnet.
+
+In Claude Code, install them all as a plugin:
+
+```
+/plugin marketplace add bcp-markets/tgbp-devkit
+/plugin install tgbp-kit@tgbp-devkit
+```
+
+The plugin adds the skills only. Add the `tgbp-mcp` server yourself, as above, so that its keys
+stay in your own config. For any other agent, copy the skills into its skills directory. They ship
+in the npm package too.
 
 ### Using the policy without MCP
 

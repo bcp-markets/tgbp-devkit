@@ -1,0 +1,15 @@
+{
+  "name": "tgbp-devkit",
+  "description": "The tGBP dev kit's agent skills, as one Claude Code plugin.",
+  "owner": {
+    "name": "BCP Markets",
+    "email": "support@tgbp.io"
+  },
+  "plugins": [
+    {
+      "name": "tgbp-kit",
+      "source": "./",
+      "description": "Agent skills for the tGBP dev kit: balances, transfers, mints, redemptions, swaps, and x402 payments in tGBP."
+    }
+  ]
+}
