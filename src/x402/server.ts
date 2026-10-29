@@ -2,11 +2,12 @@ import type { FacilitatorClient, RouteConfig } from '@x402/core/server'
 import { HTTPFacilitatorClient, x402ResourceServer } from '@x402/core/server'
 import type { AssetAmount } from '@x402/core/types'
 import { ExactEvmScheme } from '@x402/evm/exact/server'
-import { paymentMiddleware } from '@x402/express'
+import { paymentMiddlewareFromHTTPServer } from '@x402/express'
 import { declareEip2612GasSponsoringExtension } from '@x402/extensions'
 import { getAddress, isAddress, zeroAddress } from 'viem'
 
 import type { EvmTokenDeployment } from '../registry/index.js'
+import { settleOnce, TgbpHTTPResourceServer } from './settlement.js'
 import {
   MAX_PAYMENT_WINDOW_SECONDS,
   penceToBaseUnits,
@@ -16,6 +17,11 @@ import {
   x402Network,
 } from './token.js'
 
+export {
+  PAYMENT_ALREADY_SETTLED,
+  SETTLEMENT_PENDING,
+  SETTLEMENT_RETRY_AFTER_SECONDS,
+} from './settlement.js'
 export {
   MAX_PAYMENT_WINDOW_SECONDS,
   penceToBaseUnits,
@@ -75,8 +81,16 @@ export interface TgbpPaymentMiddlewareOptions {
  * signs an EIP-2612 permit for Permit2, and a facilitator that supports the
  * extension submits it with the payment, so the payer needs no ETH.
  *
- * The facilitator settles after the route handler succeeds. A handler that
- * answers 4xx or 5xx cancels the settlement.
+ * The facilitator settles after the route handler succeeds, and the
+ * handler's response goes out only once settlement confirms. A handler that
+ * answers 4xx or 5xx cancels the settlement. While settlement is pending the
+ * route answers 503 with `Retry-After`, and the buyer retries with the same
+ * payment, not a new one. The handler runs again on each retry, so a paid
+ * route must be safe to run more than once. Each payment settles at most once
+ * and buys one response; a settled payment sent again gets 402
+ * `payment_already_settled`.
+ * The middleware remembers payments in its own process, so run one instance
+ * per seller, or send a buyer's retries to the instance that took the payment.
  */
 export function tgbpPaymentMiddleware({
   routes,
@@ -115,7 +129,12 @@ export function tgbpPaymentMiddleware({
     }
   }
   const server = new x402ResourceServer(
-    facilitator ?? new HTTPFacilitatorClient({ url: X402_ORG_FACILITATOR_URL }),
+    settleOnce(facilitator ?? new HTTPFacilitatorClient({ url: X402_ORG_FACILITATOR_URL })),
   ).register(network, new ExactEvmScheme())
-  return paymentMiddleware(config, server, undefined, undefined, syncFacilitatorOnStart)
+  return paymentMiddlewareFromHTTPServer(
+    new TgbpHTTPResourceServer(server, config),
+    undefined,
+    undefined,
+    syncFacilitatorOnStart,
+  )
 }

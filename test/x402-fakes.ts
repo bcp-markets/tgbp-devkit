@@ -11,6 +11,9 @@ export function fakeFacilitator(network: string) {
   const calls: { verify: PaymentPayload[]; settle: PaymentPayload[] } = { verify: [], settle: [] }
   let refuse: string | undefined
   let failSettle: string | undefined
+  let failSettleTransaction = ''
+  let pendSettle = false
+  let throwOnSettle: Error | undefined
   const facilitator: FacilitatorClient = {
     getSupported: async () => ({
       kinds: [{ x402Version: 2, scheme: 'exact', network: network as `${string}:${string}` }],
@@ -25,12 +28,21 @@ export function fakeFacilitator(network: string) {
     },
     settle: async (payload: PaymentPayload, requirements: PaymentRequirements) => {
       calls.settle.push(payload)
+      if (throwOnSettle) throw throwOnSettle
+      if (pendSettle) {
+        return {
+          success: false,
+          errorReason: 'settlement_pending',
+          transaction: SETTLE_HASH,
+          network: requirements.network,
+        }
+      }
       return failSettle === undefined
         ? { success: true, transaction: SETTLE_HASH, network: requirements.network }
         : {
             success: false,
             errorReason: failSettle,
-            transaction: '',
+            transaction: failSettleTransaction,
             network: requirements.network,
           }
     },
@@ -39,7 +51,15 @@ export function fakeFacilitator(network: string) {
     facilitator,
     calls,
     refuseWith: (reason: string) => (refuse = reason),
-    failSettleWith: (reason: string) => (failSettle = reason),
+    /** Settlement fails with this reason, naming `transaction` if given. */
+    failSettleWith: (reason: string, transaction = '') => {
+      failSettle = reason
+      failSettleTransaction = transaction
+    },
+    /** Settlement answers "pending" until called with false. */
+    pend: (on = true) => (pendSettle = on),
+    /** Settlement throws, as a facilitator that times out does, until called with undefined. */
+    throwOnSettle: (error: Error | undefined) => (throwOnSettle = error),
   }
 }
 

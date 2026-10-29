@@ -37,7 +37,7 @@ The policy runs inside the server's process. Give the agent the MCP server, neve
 
 [x402](https://x402.org) lets an HTTP API charge per request, so an agent can pay for a call without an account or an API key. `@bcptechnologies/tgbp-kit/x402/server` prices an Express route in pence of tGBP, and `@bcptechnologies/tgbp-kit/x402/client` pays it. Both run on Base Sepolia with test tGBP. The payer needs test tGBP but no ETH, because the facilitator pays the gas. The [test tGBP faucet](https://dev.tokenisedgbp.com/quickstart.md) sends 10 test tGBP a day.
 
-The [README](https://github.com/bcp-markets/tgbp-devkit#x402-payments-base-sepolia) covers both sides. The [x402 demo](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-demo) runs the whole flow: an agent pays 5p for an API call.
+The [README](https://github.com/bcp-markets/tgbp-devkit#x402-payments-base-sepolia) covers both sides. The [x402 demo](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-demo) runs the whole flow: an agent pays the [example seller](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-seller) 5p for an API call.
 
 ## Community
 

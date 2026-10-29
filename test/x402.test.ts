@@ -6,6 +6,8 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
+import { SettleError } from '@x402/core/types'
 import express from 'express'
 import {
   type Address,
@@ -21,11 +23,13 @@ import {
 import { foundry } from 'viem/chains'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
+import { sellerApp } from '../examples/x402-seller/seller.js'
 import { createSpendGuard, type SpendGuard, type SpendPolicy } from '../src/agent/index.js'
 import { isTgbpKitError } from '../src/errors.js'
 import type { EvmTokenDeployment } from '../src/evm/index.js'
 import { createTgbpPaymentFetch, quoteTgbpPayment } from '../src/x402/client.js'
 import { TGBP_BASE_SEPOLIA, tgbpPaymentMiddleware, tgbpPrice } from '../src/x402/server.js'
+import { paymentKey, settleOnce } from '../src/x402/settlement.js'
 import { startAnvil } from './anvil.js'
 import { mockTgbpAbi, mockTgbpBytecode } from './fixtures/mock-tgbp.js'
 import { fakeFacilitator, SETTLE_HASH, serve } from './x402-fakes.js'
@@ -33,6 +37,42 @@ import { fakeFacilitator, SETTLE_HASH, serve } from './x402-fakes.js'
 const FIVE_PENCE = 5n * 10n ** 16n
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3'
 const PAY_TO = '0x1111111111111111111111111111111111111111'
+const PAYER = '0x2222222222222222222222222222222222222222'
+
+/**
+ * A payment header for the route's first offer, shaped like an exact-scheme
+ * Permit2 payment. The fake facilitator checks no signature, so the server
+ * tests need no chain.
+ */
+async function paymentFor(
+  url: string,
+  nonce = '1',
+  signature = `0x${'cd'.repeat(65)}`,
+): Promise<string> {
+  const unpaid = await fetch(url)
+  const required = decodeHeader(unpaid.headers.get('PAYMENT-REQUIRED')) as {
+    resource: unknown
+    accepts: [{ amount: string; asset: string; payTo: string }]
+  }
+  const accepted = required.accepts[0]
+  const payload = {
+    x402Version: 2,
+    resource: required.resource,
+    accepted,
+    payload: {
+      signature,
+      permit2Authorization: {
+        from: PAYER,
+        permitted: { token: accepted.asset, amount: accepted.amount },
+        spender: '0x402085c248EeA27D92E8b30b2C58ed07f9E20001',
+        nonce,
+        deadline: String(Math.floor(Date.now() / 1000) + 300),
+        witness: { to: accepted.payTo, validAfter: '0' },
+      },
+    },
+  }
+  return Buffer.from(JSON.stringify(payload)).toString('base64')
+}
 
 /** A server that answers every request with 402 and these terms, to test what the client refuses to sign. */
 async function serveTerms(paymentRequired: Record<string, unknown>) {
@@ -132,6 +172,227 @@ describe('tgbpPaymentMiddleware', () => {
         facilitator,
       }),
     ).toThrow(TypeError)
+  })
+})
+
+describe('tgbpPaymentMiddleware settlement', () => {
+  let fake: ReturnType<typeof fakeFacilitator>
+  let server: Awaited<ReturnType<typeof serve>>
+  let handled: number
+
+  beforeEach(async () => {
+    fake = fakeFacilitator('eip155:84532')
+    handled = 0
+    const app = express()
+    app.use(
+      tgbpPaymentMiddleware({
+        routes: {
+          'GET /quote': { pence: 5, payTo: PAY_TO },
+          'GET /other': { pence: 5, payTo: PAY_TO },
+        },
+        facilitator: fake.facilitator,
+      }),
+    )
+    const answer: express.RequestHandler = (_req, res) => {
+      handled += 1
+      res.json({ quote: 'paid' })
+    }
+    app.get('/quote', answer)
+    app.get('/other', answer)
+    server = await serve(app)
+  })
+
+  afterEach(() => server.close())
+
+  const send = (payment: string, path = '/quote') =>
+    fetch(`${server.url}${path}`, { headers: { 'PAYMENT-SIGNATURE': payment } })
+
+  it('answers 503 with Retry-After and withholds the response while settlement is pending', async () => {
+    fake.pend()
+    const response = await send(await paymentFor(`${server.url}/quote`))
+    expect(response.status).toBe(503)
+    expect(response.headers.get('Retry-After')).toBe('2')
+    expect(await response.text()).not.toContain('paid')
+    expect(decodeHeader(response.headers.get('PAYMENT-RESPONSE'))).toMatchObject({
+      success: false,
+      errorReason: 'settlement_pending',
+      transaction: SETTLE_HASH,
+    })
+  })
+
+  it('delivers the response once a retry of the pending payment confirms, without verifying it again', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    fake.pend()
+    expect((await send(payment)).status).toBe(503)
+
+    fake.pend(false)
+    const retry = await send(payment)
+    expect(retry.status).toBe(200)
+    expect(await retry.json()).toEqual({ quote: 'paid' })
+    expect(decodeHeader(retry.headers.get('PAYMENT-RESPONSE'))).toMatchObject({
+      success: true,
+      transaction: SETTLE_HASH,
+    })
+    // The facilitator saw the payment verified once; a real one would refuse its spent nonce.
+    expect(fake.calls.verify).toHaveLength(1)
+  })
+
+  it('settles a payment sent twice once, and refuses the second response', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    expect((await send(payment)).status).toBe(200)
+
+    const replay = await send(payment)
+    expect(replay.status).toBe(402)
+    expect(await replay.text()).not.toContain('paid')
+    expect(fake.calls.settle).toHaveLength(1)
+    expect(fake.calls.verify).toHaveLength(1)
+  })
+
+  it('refuses a settled payment replayed on another route with the same price', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    expect((await send(payment)).status).toBe(200)
+    expect((await send(payment, '/other')).status).toBe(402)
+    expect(fake.calls.settle).toHaveLength(1)
+  })
+
+  it('settles the same payment sent twice at once only once', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    const statuses = (await Promise.all([send(payment), send(payment)])).map((r) => r.status)
+    expect(statuses.sort()).toEqual([200, 402])
+    expect(fake.calls.settle).toHaveLength(1)
+  })
+
+  it('treats a facilitator that throws during settlement as pending, so the same payment can retry', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    fake.throwOnSettle(new Error('socket hang up'))
+    const response = await send(payment)
+    expect(response.status).toBe(503)
+    expect(await response.text()).not.toContain('paid')
+
+    fake.throwOnSettle(undefined)
+    expect((await send(payment)).status).toBe(200)
+    expect(fake.calls.settle).toHaveLength(2)
+  })
+
+  it('forgets a payment whose settlement failed, so the facilitator rules on a retry', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    fake.failSettleWith('invalid_exact_evm_transaction_failed')
+    expect((await send(payment)).status).toBe(402)
+    expect(handled).toBe(1)
+    expect((await send(payment)).status).toBe(402)
+    expect(fake.calls.verify).toHaveLength(2)
+    expect(fake.calls.settle).toHaveLength(2)
+  })
+
+  it('keeps a pending payment pending when a retry is refused, since the first submission may still land', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    fake.pend()
+    expect((await send(payment)).status).toBe(503)
+
+    fake.pend(false)
+    fake.failSettleWith('permit2_invalid_nonce')
+    const refused = await send(payment)
+    expect(refused.status).toBe(503)
+    expect(decodeHeader(refused.headers.get('PAYMENT-RESPONSE'))).toMatchObject({
+      errorReason: 'settlement_pending',
+      transaction: SETTLE_HASH,
+    })
+  })
+
+  it('keeps a payment pending when its first refusal names a transaction', async () => {
+    const payment = await paymentFor(`${server.url}/quote`)
+    fake.failSettleWith('invalid_transaction_state', SETTLE_HASH)
+    expect((await send(payment)).status).toBe(503)
+
+    fake.failSettleWith('permit2_invalid_nonce')
+    expect((await send(payment)).status).toBe(503)
+    expect(fake.calls.verify).toHaveLength(1)
+  })
+
+  it('treats a facilitator 5xx as pending and a 4xx as a refusal', async () => {
+    fake.throwOnSettle(
+      new SettleError(502, {
+        success: false,
+        errorReason: 'unexpected_settle_error',
+        transaction: '',
+        network: 'eip155:84532',
+      }),
+    )
+    expect((await send(await paymentFor(`${server.url}/quote`, '1'))).status).toBe(503)
+
+    fake.throwOnSettle(
+      new SettleError(400, {
+        success: false,
+        errorReason: 'invalid_exact_evm_payload_signature',
+        transaction: '',
+        network: 'eip155:84532',
+      }),
+    )
+    expect((await send(await paymentFor(`${server.url}/quote`, '2'))).status).toBe(402)
+  })
+
+  it('tells the buyer nothing about why the facilitator failed', async () => {
+    fake.throwOnSettle(new Error('connect ECONNREFUSED 10.0.0.7:443'))
+    const response = await send(await paymentFor(`${server.url}/quote`))
+    expect(response.status).toBe(503)
+    expect(JSON.stringify(decodeHeader(response.headers.get('PAYMENT-RESPONSE')))).not.toContain(
+      'ECONNREFUSED',
+    )
+  })
+
+  it('answers another payload under a pending payment with pending, and still settles the original', async () => {
+    const original = await paymentFor(`${server.url}/quote`, '7')
+    const other = await paymentFor(`${server.url}/quote`, '7', `0x${'ef'.repeat(65)}`)
+    fake.pend()
+    expect((await send(original)).status).toBe(503)
+    // The x402 server asks once more at once when a settlement answers pending.
+    expect(fake.calls.settle).toHaveLength(2)
+
+    fake.pend(false)
+    expect((await send(other)).status).toBe(503)
+    expect(fake.calls.settle).toHaveLength(2)
+
+    expect((await send(original)).status).toBe(200)
+    expect(fake.calls.settle.at(-1)?.payload).toMatchObject({ signature: `0x${'cd'.repeat(65)}` })
+  })
+
+  it('keeps payments with different nonces apart', async () => {
+    expect((await send(await paymentFor(`${server.url}/quote`, '1'))).status).toBe(200)
+    expect((await send(await paymentFor(`${server.url}/quote`, '2'))).status).toBe(200)
+    expect(fake.calls.settle).toHaveLength(2)
+  })
+})
+
+describe('settleOnce', () => {
+  const payment = (nonce: string, deadline: number) =>
+    ({
+      x402Version: 2,
+      accepted: { network: 'eip155:84532' },
+      payload: { permit2Authorization: { from: PAYER, nonce, deadline: String(deadline) } },
+    }) as unknown as PaymentPayload
+  const requirements = { network: 'eip155:84532' } as unknown as PaymentRequirements
+
+  it('identifies a Permit2 payment by network, payer and nonce, however the nonce is spelt', () => {
+    expect(paymentKey(payment('0x01', 0))).toBe(paymentKey(payment('1', 0)))
+    expect(paymentKey(payment('1', 0))).not.toBe(paymentKey(payment('2', 0)))
+  })
+
+  it('forgets a settled payment ten minutes after its deadline', async () => {
+    const fake = fakeFacilitator('eip155:84532')
+    let time = 1_000_000_000_000
+    const guarded = settleOnce(fake.facilitator, () => time)
+    const paid = payment('1', time / 1000 + 300)
+
+    expect((await guarded.settle(paid, requirements)).success).toBe(true)
+    expect(await guarded.verify(paid, requirements)).toMatchObject({
+      isValid: false,
+      invalidReason: 'payment_already_settled',
+    })
+    expect(fake.calls.verify).toHaveLength(0)
+
+    time += (300 + 600) * 1000
+    await guarded.verify(paid, requirements)
+    expect(fake.calls.verify).toHaveLength(1)
   })
 })
 
@@ -433,6 +694,36 @@ describe('createTgbpPaymentFetch', () => {
     await expect(wrongToken(`${server.url}/quote`, undefined, REASON)).rejects.toMatchObject({
       code: 'PAYMENT_NOT_OFFERED',
     })
+  })
+
+  it('pays the example seller 5p for a quote', async () => {
+    const seller = await serve(sellerApp({ payTo: PAY_TO, token, facilitator: fake.facilitator }))
+    // The seller is a second local server, so its policy lists that server instead.
+    const sellerGuard = createSpendGuard({
+      policy: {
+        ...policy(),
+        x402: {
+          services: [{ match: seller.url, category: 'quotes' }],
+          categoryBudgets: { quotes: '0.15' },
+          paymentsPerMinute: 10,
+        },
+      },
+      ledgerPath,
+      approver: async () => true,
+    })
+    try {
+      expect(await (await fetch(`${seller.url}/health`)).json()).toEqual({ ok: true })
+      const { response, settlement } = await pay(10, sellerGuard)(`${seller.url}/quote`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ paidWith: '5p of test tGBP' })
+      expect(settlement).toMatchObject({ success: true, transaction: SETTLE_HASH })
+      expect(fake.calls.settle[0]?.accepted).toMatchObject({
+        amount: FIVE_PENCE.toString(),
+        payTo: PAY_TO,
+      })
+    } finally {
+      await seller.close()
+    }
   })
 
   it('sends a POST body again with the payment', async () => {

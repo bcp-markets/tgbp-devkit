@@ -1,7 +1,8 @@
 /**
  * An agent pays 5p of test tGBP for an API call over x402 on Base Sepolia,
- * from a wallet that holds no ETH. This is also the end-to-end test of
- * `@bcptechnologies/tgbp-kit/x402`: it exits 1 if any check fails.
+ * from a wallet that holds no ETH. The API is the example seller in
+ * `examples/x402-seller`, run in this process. This is also the end-to-end
+ * test of `@bcptechnologies/tgbp-kit/x402`: it exits 1 if any check fails.
  *
  *   pnpm x402:demo --fund-from <foundry keystore account>
  *   pnpm x402:demo --pay-to <address>        # fund the printed payer yourself
@@ -20,7 +21,6 @@ import { parseArgs } from 'node:util'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import express from 'express'
 import {
   createPublicClient,
   createWalletClient,
@@ -39,13 +39,10 @@ import { formatAmount } from '../../src/amount.js'
 import { tgbpAbi } from '../../src/evm/abi.js'
 import { createTgbpMcpServer } from '../../src/mcp/server.js'
 import { createTgbpPaymentFetch } from '../../src/x402/client.js'
-import {
-  penceToBaseUnits,
-  TGBP_BASE_SEPOLIA,
-  tgbpPaymentMiddleware,
-} from '../../src/x402/server.js'
+import { penceToBaseUnits, TGBP_BASE_SEPOLIA } from '../../src/x402/server.js'
+import { QUOTE_PENCE, sellerApp } from '../x402-seller/seller.js'
 
-const PENCE = 5
+const PENCE = QUOTE_PENCE
 const token = TGBP_BASE_SEPOLIA
 const price = penceToBaseUnits(PENCE, token)
 const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL ?? 'https://sepolia.base.org'
@@ -211,15 +208,7 @@ async function main(): Promise<void> {
   const payerBefore = await tgbpBalance(account.address)
 
   const ledgerDir = await mkdtemp(join(tmpdir(), 'tgbp-x402-demo-'))
-  const app = express()
-  app.use(
-    tgbpPaymentMiddleware({
-      routes: { 'GET /quote': { pence: PENCE, payTo, description: 'A sterling quote' } },
-    }),
-  )
-  app.get('/quote', (_req, res) => {
-    res.json({ quote: 'GBP is the currency of the United Kingdom', paidWith: '5p of test tGBP' })
-  })
+  const app = sellerApp({ payTo })
   const server = await new Promise<ReturnType<typeof app.listen>>((resolve) => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening))
   })

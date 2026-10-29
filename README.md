@@ -405,6 +405,21 @@ gas, so **the payer needs test tGBP but no ETH**. The x402.org facilitator suppo
 Sepolia. The middleware uses x402.org by default, so a mainnet token needs a `facilitator`
 passed in. The middleware trusts the facilitator's report that a payment settled.
 
+The route's response goes out only after the payment settles. The middleware answers:
+
+| Settlement | Answer |
+|---|---|
+| Confirmed | The route's response, with the settlement in the `PAYMENT-RESPONSE` header. |
+| Pending, or the facilitator gave no answer | `503` with `Retry-After`, and not the route's response. Retry with the same payment header, not a new payment. |
+| Already settled for an earlier request | `402` with `payment_already_settled`. One payment buys one response. |
+| Failed | `402` with the facilitator's reason. |
+
+A payment is its payer and Permit2 nonce, so each payment settles at most once. Once a payment has
+been pending, or a refusal names its transaction, it stays pending until it settles, because that
+refusal does not prove nothing moved on chain. The route handler runs again on each retry, so make a paid route safe to run
+more than once. The middleware remembers payments in its own process, so send a buyer's retries
+to the instance that took the payment.
+
 Before it signs, the client reads the token's pause state, the ban status of payer and payee,
 and the payer's balance. It throws `TOKEN_PAUSED`, `ADDRESS_BANNED` or `INSUFFICIENT_BALANCE`
 without signing anything. These checks are best effort, because the state can change before the
@@ -429,8 +444,9 @@ settle until `error.details.deadline` (Unix seconds). Check the payer's balance,
 deadline, before you retry. A retry before then may pay twice. The `settlement` the client returns
 is what the facilitator reported, so read its transaction receipt before you treat it as final.
 
-[`examples/x402-demo`](examples/x402-demo) runs the whole flow on Base Sepolia: an agent pays 5p
-for an API call from a wallet that holds no ETH.
+[`examples/x402-seller`](examples/x402-seller) is a paid API that charges 5p per call.
+[`examples/x402-demo`](examples/x402-demo) runs the whole flow on Base Sepolia: an agent pays that
+seller 5p for an API call from a wallet that holds no ETH.
 
 ## Test tGBP faucet (Base Sepolia)
 

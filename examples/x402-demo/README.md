@@ -4,7 +4,8 @@
 
 1. It makes a fresh payer key in memory and checks that the payer holds 0 ETH.
 2. The payer receives 5p of test tGBP.
-3. A local Express server prices `GET /quote` at 5p with `tgbpPaymentMiddleware`.
+3. It starts the [example seller](../x402-seller) in the same process; it prices `GET /quote` at 5p
+   with `tgbpPaymentMiddleware`.
 4. The agent calls `/quote` with `createTgbpPaymentFetch`. It gets HTTP 402. Its spend policy
    lists `/quote` as the one service it may pay. This is the first payment to that service, so
    the guard asks the owner, and the demo approves. The guard then allows the 5p and records it
@@ -41,9 +42,10 @@ endpoint instead of `https://sepolia.base.org`.
 
 <!-- x402-demo-run -->
 
-On 23 October 2026 a fresh payer holding 0 ETH paid 5p of test tGBP for `/quote` and got the
-quote back. The facilitator settled it in Base Sepolia block 49298807:
-[`0x8da65b80…a28df1f`](https://sepolia.basescan.org/tx/0x8da65b804414eda232f8368a2e55b45d51b46397753c7cd56c069c01ea28df1f).
+On 29 October 2026 a fresh payer holding 0 ETH paid 5p of test tGBP to the
+[example seller](../x402-seller) for `/quote` and got the quote back. The seller sent the quote
+only once the facilitator had settled the payment, in Base Sepolia block 51927547:
+[`0x6fad6bf6…c1d25e0`](https://sepolia.basescan.org/tx/0x6fad6bf65c1a8539af55f4d459baffabfe6e69213eae0ca9fd3fbab67c1d25e0).
 
 ```text
 PASS  payer holds 0 ETH
@@ -53,8 +55,5 @@ PASS  the settlement transaction succeeded on Base Sepolia
 PASS  the settlement moved exactly 5p of tGBP from the payer to 0xd63Cda198C9bc1D9B02Ab052D11bC66907236BBd
 PASS  the payer paid 5p, once
 PASS  the payer still holds 0 ETH: the facilitator paid the gas
+PASS  the spend ledger counted the payment against the daily cap
 ```
-
-The run before it failed: the facilitator's own transaction submission returned an RPC error.
-The client threw `PAYMENT_REFUSED` with the facilitator's reason, nothing moved, and the next run
-settled.

@@ -26,3 +26,4 @@ Each page is Markdown at its path plus `.md`; the links below point to those cop
 - [Python quickstart script](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/python-quickstart): the file the Python quickstart uses.
 - [Quickstart scripts](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/quickstart): the files the quickstart uses.
 - [x402 demo](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-demo): an agent pays 5p of test tGBP for an API call on Base Sepolia.
+- [x402 seller example](https://github.com/bcp-markets/tgbp-devkit/tree/main/examples/x402-seller): a paid API that charges 5p of test tGBP per call, and holds back each response until its payment settles.
