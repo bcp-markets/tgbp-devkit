@@ -32,6 +32,7 @@ import {
   handle,
   NotConfigured,
   StoragePendingSettlements,
+  StorageSettledPayments,
 } from './facilitator.js'
 
 // The few runtime types this Worker touches, so it needs no workers-types package.
@@ -77,13 +78,26 @@ export default {
     }
     // Buffer the body: a streamed body the Durable Object answers without reading, a 401 say, throws.
     const body = request.method === 'POST' ? await request.arrayBuffer() : undefined
-    return stub(env).fetch(
-      new Request(request.url, { method: request.method, headers: request.headers, body }),
-    )
+    try {
+      return await stub(env).fetch(
+        new Request(request.url, { method: request.method, headers: request.headers, body }),
+      )
+    } catch (error) {
+      // A retry is safe: the pending and settled stores and the Permit2 nonce stop a second payment.
+      console.error('facilitator request failed', describeError(error))
+      return Response.json(
+        { error: 'the settlement outcome is unknown; retry with the same payment' },
+        { status: 503 },
+      )
+    }
   },
 
-  async scheduled(_controller: unknown, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(stub(env).fetch(new Request('https://facilitator/gas-check', { method: 'POST' })))
+  /** Throws when the gas check fails, so the cron run is marked failed. */
+  async scheduled(_controller: unknown, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const response = await stub(env).fetch(
+      new Request('https://facilitator/gas-check', { method: 'POST' }),
+    )
+    if (!response.ok) throw new Error(`gas check failed: ${response.status}`)
   },
 }
 
@@ -97,21 +111,32 @@ export class TgbpFacilitator {
   private readonly env: Env
   private queue: Promise<unknown> = Promise.resolve()
   private pending = 0
-  private checking?: Promise<Response>
+  private checking?: Promise<{ status: number; body: unknown }>
+  private readonly settledPayments: StorageSettledPayments
   private built?: Promise<{ facilitator: Facilitator; publicClient: PublicClient; address: Hex }>
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state
     this.env = env
+    this.settledPayments = new StorageSettledPayments(state.storage)
   }
 
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname === '/gas-check') return this.gasCheck()
+    let token: EvmTokenDeployment
+    try {
+      token = this.token()
+    } catch (error) {
+      if (!(error instanceof NotConfigured)) throw error
+      console.error('facilitator not configured', error.message)
+      return Response.json({ error: 'the facilitator is not configured' }, { status: 503 })
+    }
     return handle(request, {
       facilitator: async () => (await this.build()).facilitator,
       authToken: this.env.FACILITATOR_AUTH_TOKEN,
-      token: this.token(),
+      token,
       serialize: (run) => this.serialize(run),
+      settled: this.settledPayments,
     })
   }
 
@@ -131,7 +156,8 @@ export class TgbpFacilitator {
 
   /**
    * Joins a check already running: a second check would read the alert time
-   * while the first awaits the balance, and send the alert twice.
+   * while the first awaits the balance, and send the alert twice. Each caller
+   * gets its own Response built from the shared result.
    */
   private gasCheck(): Promise<Response> {
     if (!this.checking) {
@@ -139,34 +165,46 @@ export class TgbpFacilitator {
         this.checking = undefined
       })
     }
-    return this.checking.then((response) => response.clone())
+    return this.checking.then(({ status, body }) => Response.json(body, { status }))
   }
 
-  private async runGasCheck(): Promise<Response> {
+  /** The token is resolved inside `build()`, so a bad FACILITATOR_CHAIN is caught here too. */
+  private async runGasCheck(): Promise<{ status: number; body: unknown }> {
     try {
       const { publicClient, address } = await this.build()
       const result = await checkGas({
         storage: this.state.storage,
         address,
         balance: () => publicClient.getBalance({ address }),
-        threshold: parseEther(this.env.MIN_GAS_ETH ?? '0.001'),
+        threshold: this.minGas(),
         notify: (text) => this.alert(text),
       })
-      return Response.json({ result })
+      return { status: 200, body: { result } }
     } catch (error) {
       console.error('gas check failed', describeError(error))
-      return Response.json({ error: 'gas check failed' }, { status: 500 })
+      return { status: 500, body: { error: 'gas check failed' } }
     }
   }
 
+  /** MIN_GAS_ETH in wei; a typo must not turn the alert off. */
+  private minGas(): bigint {
+    const eth = this.env.MIN_GAS_ETH ?? '0.001'
+    if (!/^\d+(\.\d+)?$/.test(eth) || parseEther(eth) === 0n) {
+      throw new NotConfigured('MIN_GAS_ETH must be a positive ETH amount')
+    }
+    return parseEther(eth)
+  }
+
+  /** Throws when the alert is not sent, so checkGas does not record it and tries again. */
   private async alert(text: string): Promise<void> {
     console.error('low gas', text)
     const url = this.env.ALERT_WEBHOOK_URL
-    if (!url) return
+    if (!url) throw new NotConfigured('ALERT_WEBHOOK_URL is not set')
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(10_000),
     })
     if (!response.ok) throw new Error(`alert webhook answered ${response.status}`)
   }

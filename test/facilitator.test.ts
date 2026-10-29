@@ -21,6 +21,7 @@ import {
   NotConfigured,
   PENDING_TTL_MS,
   StoragePendingSettlements,
+  StorageSettledPayments,
 } from '../facilitator/worker/facilitator.js'
 import { getEvmToken } from '../src/registry/index.js'
 
@@ -75,12 +76,12 @@ function requirements(overrides: Partial<PaymentRequirements> = {}): PaymentRequ
 
 const payload = { x402Version: 2, payload: {} } as unknown as PaymentPayload
 
-function fakeFacilitator(): Facilitator & {
+function fakeFacilitator(signers: Record<string, string[]> = {}): Facilitator & {
   verify: ReturnType<typeof vi.fn>
   settle: ReturnType<typeof vi.fn>
 } {
   return {
-    getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+    getSupported: () => ({ kinds: [], extensions: [], signers }),
     verify: vi.fn(async () => ({ isValid: true, payer: '0xpayer' })),
     settle: vi.fn(async () => ({
       success: true,
@@ -96,6 +97,7 @@ function deps(overrides: Partial<HandleDeps> = {}, facilitator = fakeFacilitator
     authToken: TOKEN,
     token: BASE,
     serialize: (run) => run(),
+    settled: new StorageSettledPayments(memoryStorage()),
     ...overrides,
   }
 }
@@ -181,6 +183,7 @@ describe('handle', () => {
     ['another asset', { asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' }, 'unsupported_asset'],
     ['no asset', { asset: undefined as unknown as string }, 'unsupported_asset'],
     ['another scheme', { scheme: 'batch-settlement' }, 'unsupported_scheme'],
+    ['a payTo that is not an address', { payTo: 'nope' }, 'invalid_pay_to'],
   ])('refuses %s without asking the facilitator', async (_, overrides, reason) => {
     const facilitator = fakeFacilitator()
     const body = { paymentPayload: payload, paymentRequirements: requirements(overrides) }
@@ -192,6 +195,89 @@ describe('handle', () => {
 
     expect(facilitator.verify).not.toHaveBeenCalled()
     expect(facilitator.settle).not.toHaveBeenCalled()
+  })
+
+  it('refuses a payTo that is the gas key, in any letter case', async () => {
+    const facilitator = fakeFacilitator({ 'eip155:*': [GAS_KEY] })
+    const body = {
+      paymentPayload: payload,
+      paymentRequirements: requirements({ payTo: GAS_KEY.toLowerCase() }),
+    }
+
+    const verified = await handle(post('/verify', body), deps({}, facilitator))
+    expect(await verified.json()).toEqual({ isValid: false, invalidReason: 'invalid_pay_to' })
+    const settled = await handle(post('/settle', body), deps({}, facilitator))
+    expect(await settled.json()).toMatchObject({ success: false, errorReason: 'invalid_pay_to' })
+
+    expect(facilitator.verify).not.toHaveBeenCalled()
+    expect(facilitator.settle).not.toHaveBeenCalled()
+  })
+
+  it('answers a retry of a settled payment with the same success, without settling again', async () => {
+    const facilitator = fakeFacilitator()
+    const shared = deps({}, facilitator)
+    const body = { paymentPayload: payload, paymentRequirements: requirements() }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    const first = await (await handle(post('/settle', body), shared)).json()
+    const retry = await (await handle(post('/settle', body), shared)).json()
+    expect(retry).toEqual(first)
+    expect(retry).toMatchObject({ success: true, transaction: '0xabc' })
+    expect(facilitator.settle).toHaveBeenCalledOnce()
+    expect(log).toHaveBeenCalledTimes(2)
+    expect(log).toHaveBeenLastCalledWith('settlement', expect.stringContaining('"cached":true'))
+    log.mockRestore()
+  })
+
+  it('settles again after a failed settlement, which it does not remember', async () => {
+    const facilitator = fakeFacilitator()
+    facilitator.settle.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'transaction_failed',
+      transaction: '',
+      network: 'eip155:8453',
+    })
+    const shared = deps({}, facilitator)
+    const body = { paymentPayload: payload, paymentRequirements: requirements() }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    expect(await (await handle(post('/settle', body), shared)).json()).toMatchObject({
+      success: false,
+    })
+    expect(await (await handle(post('/settle', body), shared)).json()).toMatchObject({
+      success: true,
+    })
+    expect(facilitator.settle).toHaveBeenCalledTimes(2)
+    log.mockRestore()
+  })
+
+  it('takes URLs, and the RPC key in them, out of library messages', async () => {
+    const facilitator = fakeFacilitator()
+    const message = 'HTTP request failed. URL: https://rpc.example/v2/key-123 Status: 429'
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'unexpected_verify_error',
+      invalidMessage: message,
+    })
+    facilitator.settle.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'unexpected_settle_error',
+      errorMessage: message,
+      transaction: '',
+      network: 'eip155:8453',
+    })
+    const body = { paymentPayload: payload, paymentRequirements: requirements() }
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    const verified = await handle(post('/verify', body), deps({}, facilitator))
+    expect(await verified.json()).toMatchObject({
+      invalidMessage: 'HTTP request failed. URL: <url> Status: 429',
+    })
+    const settled = await handle(post('/settle', body), deps({}, facilitator))
+    expect(await settled.json()).toMatchObject({
+      errorMessage: 'HTTP request failed. URL: <url> Status: 429',
+    })
+    log.mockRestore()
   })
 
   it('takes the asset address in any letter case', async () => {
@@ -264,6 +350,22 @@ describe('StoragePendingSettlements', () => {
     await store.set('payment-1', '0xhash')
     await store.delete('payment-1')
     expect(await store.get('payment-1')).toBeUndefined()
+  })
+})
+
+describe('StorageSettledPayments', () => {
+  it('remembers a settlement until the TTL passes, then forgets it', async () => {
+    const storage = memoryStorage()
+    let now = 1_000
+    const store = new StorageSettledPayments(storage, () => now)
+    const result = { success: true, transaction: '0xabc', network: 'eip155:8453' as const }
+    await store.set('payment-1', result)
+
+    now += PENDING_TTL_MS
+    expect(await store.get('payment-1')).toEqual(result)
+    now += 1
+    expect(await store.get('payment-1')).toBeUndefined()
+    expect(storage.map.size).toBe(0)
   })
 })
 

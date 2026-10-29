@@ -4,12 +4,16 @@
  * when it warns that its gas key is running low. The Durable Object in
  * `index.ts` holds the signer and runs one settlement at a time.
  */
-import { type PendingSettlementStore, x402Facilitator } from '@x402/core/facilitator'
-import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
+import {
+  PENDING_SETTLEMENT_TTL_MS,
+  type PendingSettlementStore,
+  x402Facilitator,
+} from '@x402/core/facilitator'
+import type { PaymentPayload, PaymentRequirements, SettleResponse } from '@x402/core/types'
 import type { FacilitatorEvmSigner } from '@x402/evm'
 import { ExactEvmScheme } from '@x402/evm/exact/facilitator'
 import { UptoEvmScheme } from '@x402/evm/upto/facilitator'
-import { type Address, formatEther, getAddress, isAddress } from 'viem'
+import { type Address, bytesToHex, formatEther, getAddress, isAddress } from 'viem'
 
 import type { EvmTokenDeployment } from '../../src/registry/index.js'
 import { x402Network } from '../../src/x402/token.js'
@@ -23,8 +27,11 @@ export const EIP2612_GAS_SPONSORING = { key: 'eip2612GasSponsoring' } as const
 /** The schemes the facilitator registers. */
 export const SCHEMES = ['exact', 'upto'] as const
 
-/** A pending settlement is retried by its tx hash for this long; the x402 in-memory store's TTL. */
-export const PENDING_TTL_MS = 5 * 60 * 1000
+/**
+ * A pending settlement is retried by its tx hash for this long, and a settled
+ * payment is remembered for as long; the x402 in-memory store's TTL.
+ */
+export const PENDING_TTL_MS = PENDING_SETTLEMENT_TTL_MS
 
 /** A low-gas alert repeats at most this often while the balance stays low. */
 export const ALERT_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -60,6 +67,8 @@ export type Facilitator = Pick<x402Facilitator, 'getSupported' | 'verify' | 'set
  * The x402 reference facilitator with the `exact` and `upto` schemes on the
  * token's chain only, and the `eip2612GasSponsoring` extension, which lets a
  * payer with no ETH sign a permit that the settlement submits for them.
+ * `exact` simulates before it broadcasts, so a retry of a settled payment,
+ * whose Permit2 nonce is used, fails before it spends gas.
  */
 export function createTgbpFacilitator(
   signer: FacilitatorEvmSigner,
@@ -68,7 +77,10 @@ export function createTgbpFacilitator(
 ): x402Facilitator {
   const network = x402Network(token)
   return new x402Facilitator()
-    .register(network, new ExactEvmScheme(signer, { pendingSettlementStore }))
+    .register(
+      network,
+      new ExactEvmScheme(signer, { pendingSettlementStore, simulateInSettle: true }),
+    )
     .register(network, new UptoEvmScheme(signer, { pendingSettlementStore }))
     .registerExtension(EIP2612_GAS_SPONSORING)
 }
@@ -81,6 +93,14 @@ export interface HandleDeps {
   token: EvmTokenDeployment
   /** Runs settlements one at a time, so the gas key's nonces never race. */
   serialize: <T>(run: () => Promise<T>) => Promise<T>
+  /** Successful settlements, so a retry of a settled payment gets the same success back. */
+  settled: SettledPayments
+}
+
+/** Successful settlements by payment, the hex SHA-256 of the payment payload's JSON. */
+export interface SettledPayments {
+  get(key: string): Promise<SettleResponse | undefined>
+  set(key: string, result: SettleResponse): Promise<void>
 }
 
 /**
@@ -112,10 +132,11 @@ export async function handle(request: Request, deps: HandleDeps): Promise<Respon
       return json(400, { error: 'send JSON with paymentPayload and paymentRequirements' })
     }
     const { paymentPayload, paymentRequirements } = body
-    const refusal = refuse(paymentRequirements, deps.token)
+    const signers = Object.values(facilitator.getSupported().signers).flat()
+    const refusal = refuse(paymentRequirements, deps.token, signers)
     if (action === 'verify') {
       if (refusal) return json(200, { isValid: false, invalidReason: refusal })
-      return json(200, await facilitator.verify(paymentPayload, paymentRequirements))
+      return json(200, redact(await facilitator.verify(paymentPayload, paymentRequirements)))
     }
     if (refusal) {
       return json(200, {
@@ -125,10 +146,16 @@ export async function handle(request: Request, deps: HandleDeps): Promise<Respon
         network: paymentRequirements.network,
       })
     }
-    return json(
-      200,
-      await deps.serialize(() => facilitator.settle(paymentPayload, paymentRequirements)),
-    )
+    const key = bytesToHex(await digest(JSON.stringify(paymentPayload)))
+    const { result, cached } = await deps.serialize(async () => {
+      const done = await deps.settled.get(key)
+      if (done) return { result: done, cached: true }
+      const fresh = await facilitator.settle(paymentPayload, paymentRequirements)
+      if (fresh.success) await deps.settled.set(key, fresh)
+      return { result: fresh, cached: false }
+    })
+    logSettlement(paymentRequirements, result, cached)
+    return json(200, redact(result))
   } catch (error) {
     if (error instanceof NotConfigured) {
       console.error('facilitator not configured', error.message)
@@ -146,6 +173,7 @@ export async function handle(request: Request, deps: HandleDeps): Promise<Respon
 export function refuse(
   requirements: PaymentRequirements,
   token: EvmTokenDeployment,
+  signers: readonly string[],
 ): string | undefined {
   if (requirements.network !== x402Network(token)) return 'invalid_network'
   if (!(SCHEMES as readonly string[]).includes(requirements.scheme)) return 'unsupported_scheme'
@@ -156,7 +184,49 @@ export function refuse(
   ) {
     return 'unsupported_asset'
   }
+  // Paying the gas key would mix tGBP into a key that must hold none.
+  const { payTo } = requirements
+  if (
+    typeof payTo !== 'string' ||
+    !isAddress(payTo) ||
+    signers.some((signer) => isAddress(signer) && getAddress(signer) === getAddress(payTo))
+  ) {
+    return 'invalid_pay_to'
+  }
   return undefined
+}
+
+/** One line per settlement outcome, for the audit trail; never the payload or its signatures. */
+function logSettlement(
+  requirements: PaymentRequirements,
+  result: SettleResponse,
+  cached: boolean,
+): void {
+  console.log(
+    'settlement',
+    JSON.stringify({
+      success: result.success,
+      network: requirements.network,
+      scheme: requirements.scheme,
+      asset: requirements.asset,
+      payTo: requirements.payTo,
+      amount: requirements.amount,
+      payer: result.payer,
+      transaction: result.transaction,
+      errorReason: result.errorReason,
+      cached,
+    }),
+  )
+}
+
+/** A copy without URLs in the library's messages: viem puts the RPC URL, API key and all, in them. */
+function redact<T extends Record<string, unknown>>(result: T): T {
+  const copy: Record<string, unknown> = { ...result }
+  for (const field of ['invalidMessage', 'errorMessage']) {
+    const value = copy[field]
+    if (typeof value === 'string') copy[field] = value.replace(/https?:\/\/\S+/g, '<url>')
+  }
+  return copy as T
 }
 
 /** Compares SHA-256 digests, so the comparison takes the same time for every wrong token. */
@@ -224,6 +294,31 @@ export class StoragePendingSettlements implements PendingSettlementStore {
 
   async delete(key: string): Promise<void> {
     await this.storage.delete(`pending:${key}`)
+  }
+}
+
+/**
+ * Successful settlements in Durable Object storage, so a retry of a payment
+ * that already settled gets the same success back rather than a failure.
+ */
+export class StorageSettledPayments implements SettledPayments {
+  constructor(
+    private readonly storage: FacilitatorStorage,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  async get(key: string): Promise<SettleResponse | undefined> {
+    const entry = await this.storage.get<{ result: SettleResponse; at: number }>(`settled:${key}`)
+    if (!entry) return undefined
+    if (this.now() - entry.at > PENDING_TTL_MS) {
+      await this.storage.delete(`settled:${key}`)
+      return undefined
+    }
+    return entry.result
+  }
+
+  async set(key: string, result: SettleResponse): Promise<void> {
+    await this.storage.put(`settled:${key}`, { result, at: this.now() })
   }
 }
 

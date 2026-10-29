@@ -8,7 +8,8 @@
 #   1. deploys the Worker and sets FACILITATOR_RPC_URL and ALERT_WEBHOOK_URL;
 #   2. on the first run, makes the gas key inside a pipe straight into the Worker
 #      secret, so no one sees it and it is never written down;
-#   3. sets the bearer token: X402_FACILITATOR_TOKEN if set, else a fresh one it prints;
+#   3. on the first run, sets the bearer token: X402_FACILITATOR_TOKEN if set, else a
+#      fresh one it prints; a re-run keeps the token and needs it as X402_FACILITATOR_TOKEN;
 #   4. sends the gas key FUND_ETH (0.002 ETH) from the keystore when it holds under 0.001;
 #   5. checks /supported, and that the gas key holds no tGBP;
 #   6. runs the x402 demo: the keystore sends a fresh payer 1p of tGBP, and the payer
@@ -29,7 +30,8 @@ export ETH_RPC_URL=$BASE_RPC_URL
 
 secret() { "${wrangler[@]}" secret put "$1" --cwd "$root/facilitator" >/dev/null; }
 
-if [[ $(cast chain-id) != 8453 ]]; then
+chain_id=$(cast chain-id)
+if [[ $chain_id != 8453 ]]; then
   echo "BASE_RPC_URL is not on Base mainnet (chain id 8453)" >&2
   exit 1
 fi
@@ -37,7 +39,7 @@ fi
 url=${FACILITATOR_URL:-}
 if [[ -z $url ]]; then
   deployed=$("${wrangler[@]}" deploy --cwd "$root/facilitator")
-  url=$(grep -oE 'https://[^ ]+\.workers\.dev' <<<"$deployed" | head -1)
+  url=$(grep -oE 'https://[^ ]+\.workers\.dev' <<<"$deployed" | head -1 || true)
   [[ -n $url ]] || { echo "could not read the Worker URL from wrangler deploy" >&2; exit 1; }
 fi
 echo "Facilitator: $url"
@@ -45,7 +47,8 @@ echo "Facilitator: $url"
 printf '%s' "$BASE_RPC_URL" | secret FACILITATOR_RPC_URL
 printf '%s' "$ALERT_WEBHOOK_URL" | secret ALERT_WEBHOOK_URL
 
-if ! "${wrangler[@]}" secret list --cwd "$root/facilitator" | grep -q FACILITATOR_PRIVATE_KEY; then
+secrets=$("${wrangler[@]}" secret list --cwd "$root/facilitator")
+if ! grep -q '"FACILITATOR_PRIVATE_KEY"' <<<"$secrets"; then
   cast wallet new --json | node -e '
     let s = ""
     process.stdin.on("data", (c) => (s += c)).on("end", () => process.stdout.write(JSON.parse(s)[0].private_key))
@@ -54,11 +57,19 @@ if ! "${wrangler[@]}" secret list --cwd "$root/facilitator" | grep -q FACILITATO
 fi
 
 token=${X402_FACILITATOR_TOKEN:-}
-if [[ -z $token ]]; then
-  token=$(openssl rand -hex 32)
-  echo "Bearer token for /verify and /settle (keep it; resource servers send it): $token"
+if grep -q '"FACILITATOR_AUTH_TOKEN"' <<<"$secrets"; then
+  # Resource servers already hold this token; a new one would lock them out.
+  if [[ -z $token ]]; then
+    echo "FACILITATOR_AUTH_TOKEN is already set; pass it as X402_FACILITATOR_TOKEN, or delete the secret to make a new one" >&2
+    exit 1
+  fi
+else
+  if [[ -z $token ]]; then
+    token=$(openssl rand -hex 32)
+    echo "Bearer token for /verify and /settle (keep it; resource servers send it): $token"
+  fi
+  printf '%s' "$token" | secret FACILITATOR_AUTH_TOKEN
 fi
-printf '%s' "$token" | secret FACILITATOR_AUTH_TOKEN
 
 # A new secret reaches the Worker within seconds; wait for /supported to name the gas key.
 supported=
@@ -73,11 +84,15 @@ for want in '"scheme":"exact","network":"eip155:8453"' '"scheme":"upto","network
   grep -qF "$want" <<<"$supported" || { echo "/supported is missing $want" >&2; exit 1; }
 done
 
-if [[ $(cast balance "$gas") -lt $(cast to-wei 0.001) ]]; then
+gas_wei=$(cast balance "$gas")
+min_wei=$(cast to-wei 0.001)
+# Bash integers overflow past about 9.2 ETH in wei, so node compares them.
+if node -e 'process.exit(BigInt(process.argv[1]) < BigInt(process.argv[2]) ? 0 : 1)' "$gas_wei" "$min_wei"; then
   echo "Sending the gas key $gas $fund_eth ETH from $account"
   cast send --account "$account" --value "${fund_eth}ether" "$gas" >/dev/null
 fi
-echo "Gas key $gas holds $(cast balance --ether "$gas") ETH"
+gas_eth=$(cast balance --ether "$gas")
+echo "Gas key $gas holds $gas_eth ETH"
 gas_tgbp=$(env -u ETH_PASSWORD cast call "$tgbp" 'balanceOf(address)(uint256)' "$gas" | cut -d' ' -f1)
 [[ $gas_tgbp == 0 ]] || { echo "the gas key holds tGBP ($gas_tgbp base units); it must hold none" >&2; exit 1; }
 echo "Gas key holds 0 tGBP"

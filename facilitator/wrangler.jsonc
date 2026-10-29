@@ -3,6 +3,8 @@
   "name": "tgbp-x402-facilitator",
   "compatibility_date": "2026-08-07",
   "main": "worker/index.ts",
+  // Serves on the account's workers.dev URL; go-live.sh reads it from the deploy.
+  "workers_dev": true,
   "preview_urls": false,
   // One instance signs every settlement in turn and keeps the pending-settlement store.
   "durable_objects": {

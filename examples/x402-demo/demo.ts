@@ -232,6 +232,9 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
 async function main(): Promise<void> {
   const fundFrom = values['fund-from']
   const payToArg = values['pay-to']
+  if (fundFrom !== undefined && payToArg !== undefined) {
+    throw new Error('pass --fund-from or --pay-to, not both')
+  }
   if (fundFrom === undefined && (payToArg === undefined || !isAddress(payToArg))) {
     throw new Error('pass --fund-from <keystore account>, or --pay-to <address>')
   }
