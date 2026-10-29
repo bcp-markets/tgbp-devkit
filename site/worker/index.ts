@@ -55,6 +55,11 @@ const TOKEN = getEvmToken('base-sepolia')
 const MAX_BODY_BYTES = 1024
 /** Drips waiting behind a slow one; past this the faucet answers busy rather than queue. */
 const MAX_PENDING_DRIPS = 20
+/**
+ * Below this the wallet cannot pay gas, and the send would fail after signing.
+ * A tGBP transfer on Base Sepolia costs well under 10^11 wei.
+ */
+const MIN_GAS_WEI = 10n ** 12n
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -168,6 +173,8 @@ export class Faucet {
             assertClientChain(walletClient, TOKEN),
           ])
           await assertCanTransfer(publicClient, TOKEN, account.address, recipient, amount)
+          const gas = await publicClient.getBalance({ address: account.address })
+          if (gas < MIN_GAS_WEI) throw new Error(`faucet wallet has ${gas} wei, too little for gas`)
         } catch (cause) {
           throw new DripNotSent(cause)
         }
