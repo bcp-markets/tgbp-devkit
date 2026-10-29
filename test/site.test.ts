@@ -34,7 +34,10 @@ describe('developer site', () => {
     }
   })
 
-  it('serves a current Markdown copy of every page', () => {
+  it('serves a current Markdown copy of every page, and no copy of a page that is gone', () => {
+    expect(siteFiles.filter((file) => file.endsWith('.md')).sort()).toEqual(
+      sitePages().map(markdownFileOf),
+    )
     for (const file of sitePages()) {
       expect(read(SITE, markdownFileOf(file)), `${file}: run pnpm generate:site-md`).toBe(
         toMarkdown(read(SITE, file)),
@@ -43,15 +46,18 @@ describe('developer site', () => {
   })
 
   it('tells AI readers on every page where its Markdown copy is and what to install', () => {
-    for (const file of sitePages()) {
+    const notes = sitePages().map((file) => {
       const page = read(SITE, file)
       const md = `/${markdownFileOf(file)}`
       expect(page, file).toContain(`<link rel="alternate" type="text/markdown" href="${md}">`)
       const aside = page.match(/<aside class="agents"[\s\S]*?<\/aside>/)?.[0] ?? ''
-      expect(aside, file).toContain(`<a href="${md}">`)
-      expect(aside, file).toContain('<code>tgbp-mcp</code> MCP server and the agent skills')
-      expect(aside, file).toContain('Start on testnet')
-    }
+      expect(aside, file).toContain(`<a href="${md}">${md}</a>`)
+      return aside.replaceAll(md, '/page.md')
+    })
+    // One note, the same on every page but for the page's own path.
+    expect(new Set(notes).size).toBe(1)
+    expect(notes[0]).toContain('<code>tgbp-mcp</code> MCP server and the agent skills')
+    expect(notes[0]).toContain('Start on testnet')
   })
 
   it('has a page for every site link in llms.txt', () => {
@@ -162,11 +168,11 @@ describe('toMarkdown', () => {
     expect(
       toMarkdown(
         page(
-          '<p><a href="/">Home</a> <a href="/brand#x">Brand</a> <a href="/llms.txt">llms</a> <a href="https://x402.org">x402</a></p>',
+          '<p><a href="/">Home</a> <a href="/brand#x">Brand</a> <a href="/llms.txt">llms</a> <a href="https://x402.org/?a=1&amp;b=2">x402</a></p>',
         ),
       ),
     ).toBe(
-      `[Home](${ORIGIN}/index.md) [Brand](${ORIGIN}/brand.md) [llms](${ORIGIN}/llms.txt) [x402](https://x402.org)\n`,
+      `[Home](${ORIGIN}/index.md) [Brand](${ORIGIN}/brand.md) [llms](${ORIGIN}/llms.txt) [x402](https://x402.org/?a=1&b=2)\n`,
     )
   })
 
@@ -204,6 +210,14 @@ x < 1
     ['a mismatched close tag', '<p><code>x</p>', '</p> closes <code>'],
     ['an unclosed element', '<p>x', '<p> is never closed'],
     ['text loose in a list', '<ul>x<li>y</li></ul>', 'text "x" outside <li>'],
+    ['a comment', '<p>x</p><!-- y -->', 'no Markdown for "<!-- y -->"'],
+    ['an uppercase tag', '<P>x</P>', 'no Markdown for "<P>x</P>"'],
+    [
+      'a form field it cannot describe',
+      '<p><form><select name="n"></select></form></p>',
+      '<select> in a form',
+    ],
+    ['an unnamed form input', '<p><form><input type="submit"></form></p>', '<input> in a form'],
   ])('throws on %s', (_, main, message) => {
     expect(() => toMarkdown(page(main))).toThrow(message)
   })

@@ -53,16 +53,23 @@ export function toMarkdown(html: string): string {
 function parse(html: string): Node[] {
   const root: Element = { tag: 'root', attrs: {}, children: [] }
   const stack = [root]
-  for (const [token, close, tag, rest] of html.matchAll(/<(\/?)([a-z][a-z0-9]*)([^>]*)>|[^<]+/g)) {
+  // A lone `<` is any other markup: a comment, a doctype, an uppercase tag.
+  for (const match of html.matchAll(/<(\/?)([a-z][a-z0-9]*)([^>]*)>|[^<]+|</g)) {
+    const [token, close, tag, rest] = match
     const parent = stack.at(-1) as Element
-    if (!tag) {
+    if (token === '<') {
+      throw new Error(`no Markdown for "${html.slice(match.index, match.index + 12)}"`)
+    } else if (!tag) {
       parent.children.push(token)
     } else if (close) {
       if (parent.tag !== tag) throw new Error(`</${tag}> closes <${parent.tag}>`)
       stack.pop()
     } else {
       const attrs = Object.fromEntries(
-        [...(rest ?? '').matchAll(/([a-z-]+)(?:="([^"]*)")?/g)].map(([, k, v]) => [k, v ?? '']),
+        [...(rest ?? '').matchAll(/([a-z-]+)(?:="([^"]*)")?/g)].map(([, k, v]) => [
+          k,
+          decode(v ?? ''),
+        ]),
       ) as Record<string, string>
       const element: Element = { tag, attrs, children: [] }
       parent.children.push(element)
@@ -176,7 +183,13 @@ function inlineNode(node: Node): string {
       return `[${inline(node.children)}](${markdownUrl(node.attrs.href ?? '')})`
     case 'form': {
       // A form cannot work in Markdown, so say where it sends what.
-      const fields = findAll(node, 'input').map((input) => `\`${input.attrs.name}\``)
+      const fields: string[] = []
+      for (const child of descendants(node)) {
+        if (child.tag === 'input' && child.attrs.name) fields.push(`\`${child.attrs.name}\``)
+        else if (child.tag !== 'label' && child.tag !== 'button') {
+          throw new Error(`no Markdown for <${child.tag}> in a form`)
+        }
+      }
       const method = (node.attrs.method ?? 'get').toUpperCase()
       return ` (The form sends ${fields.join(', ')} by ${method} to ${markdownUrl(node.attrs.action ?? '')}.) `
     }
@@ -185,11 +198,9 @@ function inlineNode(node: Node): string {
   }
 }
 
-function findAll(element: Element, tag: string): Element[] {
+function descendants(element: Element): Element[] {
   return element.children.flatMap((child) =>
-    typeof child === 'string'
-      ? []
-      : [...(child.tag === tag ? [child] : []), ...findAll(child, tag)],
+    typeof child === 'string' ? [] : [child, ...descendants(child)],
   )
 }
 
