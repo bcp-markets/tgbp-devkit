@@ -16,5 +16,13 @@
     "sourceMap": true,
     "noEmit": true
   },
-  "include": ["src", "scripts", "test", "examples", "site/worker", "vitest.config.ts"]
+  "include": [
+    "src",
+    "scripts",
+    "test",
+    "examples",
+    "site/worker",
+    "facilitator/worker",
+    "vitest.config.ts"
+  ]
 }
