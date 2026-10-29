@@ -213,12 +213,20 @@ does not allow. The [x402 client](#x402-payments-base-sepolia) runs behind the s
   "destinations": ["0x70997970C51812dc3A010C7d01b50e0d17dc79C8", "bank_…"],
   "perTransferCap": "100.00",
   "dailyCap": "250.00",
-  "redemptionApprovalAbove": "50.00"
+  "redemptionApprovalAbove": "50.00",
+  "x402": {
+    "services": [
+      { "match": "api.example.com", "category": "data" },
+      { "match": "https://search.example.com/v1", "category": "search" }
+    ],
+    "categoryBudgets": { "data": "5.00", "search": "2.00" },
+    "paymentsPerMinute": 10
+  }
 }
 ```
 
 Every field is required, and an unknown field is an error, so a misspelt cap never leaves an
-agent uncapped. Amounts are pounds; tGBP is worth £1 on every chain. A USDC swap amount counts as
+agent uncapped. `x402` is required only when `actions` allows `x402`. Amounts are pounds; tGBP is worth £1 on every chain. A USDC swap amount counts as
 the same number of pounds.
 
 | Field | What it refuses (`details.rule`) |
@@ -230,13 +238,18 @@ the same number of pounds.
 | `perTransferCap` | One transfer, mint, redemption, swap or x402 payment above this amount. |
 | `dailyCap` | An action that would take the UTC day's total above this amount. |
 | `redemptionApprovalAbove` | A redemption above this amount, unless a human approves it. |
+| `x402.services` | An x402 payment to a URL no service matches. A host name (`api.example.com`) matches every https URL on that host's default port, and no other host, port or subdomain. An endpoint URL matches that scheme, host and port, at that path or below it. Where several match, an endpoint beats a host and the longest path wins. |
+| `x402.categoryBudgets` | An x402 payment that would take its service's category over its budget in any rolling 24 hours. Every service's category needs a budget. |
+| `x402.paymentsPerMinute` | An x402 payment after this many in any rolling minute, whatever the service. |
+| (`firstPayment`) | The first x402 payment to a service, unless a human approves it. |
 
 A refused action returns `SPEND_POLICY_DENIED` with the rule, before anything is signed or sent.
 
 **Daily spend ledger.** The kit records every allowed transfer, mint, redemption, swap and x402
 payment in an append-only JSON Lines file, before it signs or sends. Each entry records the time, the
 action, the chain, the destination and the amount. An x402 entry also records the URL, without its
-credentials or query string, the price in pence and the agent's reason. `guard.budget()` reads the
+credentials or query string, the price in pence, the agent's reason, and the service and category
+it was filed under. `guard.budget()` reads the
 day's spend and what is left under the daily cap. The other rules can still refuse an action within
 it. An action that then fails stays counted, so
 the ledger may overstate the day's spend but never understate it. If the ledger cannot be read or
@@ -249,6 +262,13 @@ client ([elicitation](https://modelcontextprotocol.io/specification/2025-06-18/c
 A "no", no answer before the timeout, and a client that cannot ask all refuse it. A timeout never
 approves. The threshold applies to each redemption; the daily cap bounds what several smaller
 ones can add up to.
+
+The first x402 payment to each service waits for a human too: through the MCP client for
+`tgbp_x402_pay`, and through the guard's `approver` for the x402 client. Once
+the ledger records a payment to a service, its category budget and the per-minute limit decide
+alone. Without an approver, the first payment to every service is refused with
+`rule: 'firstPayment'` and a message that says `approval required`. The ledger marks the
+approved payment `"firstPayment": true`.
 
 ### Running the server
 
@@ -295,7 +315,8 @@ of its response with the settlement. A URL that does not ask for payment returns
 only, and a call that takes longer than 45 seconds fails. A price above `maxPence` is refused before
 anything is signed. With `estimate: true` it returns the price and whether it fits `maxPence`,
 signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
-The policy must allow `x402` on `base-sepolia` and the payee. The tool needs
+The policy must allow `x402` on `base-sepolia`, the payee, and the URL's service in
+`x402.services`. The tool needs
 `TGBP_EVM_PRIVATE_KEY`, `TGBP_RPC_URL_BASE_SEPOLIA`, and the `@x402/core` and `@x402/evm`
 packages: add `"-p", "@x402/core@2", "-p", "@x402/evm@2"` to the `npx` arguments above. The other
 tools run without them. The server fetches whatever URL the agent names, from the machine it runs
@@ -356,6 +377,7 @@ import { createTgbpPaymentFetch } from '@bcptechnologies/tgbp-kit/x402/client'
 const guard = createSpendGuard({
   policy: await loadSpendPolicy('spend-policy.json'), // allows "x402" on "base-sepolia"
   ledgerPath: 'spend-policy.ledger.jsonl',
+  approver: async (request, signal) => askYourHuman(request, signal), // the first payment to a service
 })
 const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: 10, guard })
 const { response, settlement } = await pay('https://api.example.com/quote', undefined, {
@@ -366,10 +388,12 @@ console.log(await guard.budget()) // { day, dailyCap, spent, remaining }, in pou
 ```
 
 Every payment runs through the [spend policy](#agents-mcp-server-skills-and-spend-policy) before
-it is signed. The policy must allow the `x402` action, the chain and the payee, and the price
-counts against `perTransferCap` and the same `dailyCap` as the agent's transfers, mints,
-redemptions and swaps. Each call needs a `reason` of at most 500 characters, which goes into the
-spend ledger with the URL, the price in pence and the payee. Without one, the call throws
+it is signed. The policy must allow the `x402` action, the chain and the payee, and must list the
+URL's service in `x402.services`. The price counts against `perTransferCap`, the same `dailyCap`
+as the agent's transfers, mints, redemptions and swaps, and the service's category budget. The
+first payment to a service waits for the guard's `approver`. Each call needs a `reason` of at
+most 500 characters, which goes into the spend ledger with the URL, the price in pence and the
+payee. Without one, the call throws
 `RangeError` before it sends any request. A refusal throws `SPEND_POLICY_DENIED` and signs nothing,
 and so does a ledger that cannot be read or written (`rule: 'ledger'`).
 

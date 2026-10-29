@@ -343,12 +343,18 @@ describe('swap and mint input', () => {
 
 describe('tgbp_x402_pay', () => {
   const PAY_TO = '0x1111111111111111111111111111111111111111'
-  const X402_POLICY: SpendPolicy = {
+  /** Pays the local test service, an http endpoint on a random port. */
+  const x402Policy = (): SpendPolicy => ({
     ...POLICY,
     actions: [...POLICY.actions, 'x402'],
     chains: [...POLICY.chains, 'base-sepolia'],
     destinations: [...POLICY.destinations, PAY_TO],
-  }
+    x402: {
+      services: [{ match: paid.url, category: 'quotes' }],
+      categoryBudgets: { quotes: '1' },
+      paymentsPerMinute: 10,
+    },
+  })
 
   let fake: ReturnType<typeof fakeFacilitator>
   let paid: Awaited<ReturnType<typeof serve>>
@@ -387,8 +393,10 @@ describe('tgbp_x402_pay', () => {
 
   afterEach(() => paid.close())
 
-  const connectX402 = (policy: SpendPolicy = X402_POLICY) =>
+  /** The owner approves the first payment to the service unless `elicit` says otherwise. */
+  const connectX402 = (policy: SpendPolicy = x402Policy(), elicit: ElicitAnswer = 'approve') =>
     connect({
+      elicit,
       server: {
         policy,
         evm: x402Evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
@@ -491,7 +499,7 @@ describe('tgbp_x402_pay', () => {
   })
 
   it('returns the spend guard refusal and signs nothing', async () => {
-    const policy = { ...X402_POLICY, destinations: POLICY.destinations }
+    const policy = { ...x402Policy(), destinations: POLICY.destinations }
     const { isError, body } = await call(await connectX402(policy), 'tgbp_x402_pay', {
       url: `${paid.url}/quote`,
       maxPence: 5,
@@ -503,6 +511,57 @@ describe('tgbp_x402_pay', () => {
     expect(body.message).toContain(PAY_TO)
     expect(signTypedData).not.toHaveBeenCalled()
     expect(fake.calls.verify).toHaveLength(0)
+  })
+
+  it.each([
+    ['the human says no', 'decline' as const],
+    ['the client cannot ask', undefined],
+    ['nobody answers in time', 'never' as const],
+  ])('refuses the first payment to a service when %s, and signs nothing', async (_, elicit) => {
+    const client = await connect({
+      ...(elicit ? { elicit } : {}),
+      server: {
+        policy: x402Policy(),
+        approvalTimeoutMs: 50,
+        evm: x402Evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
+      },
+    })
+    const { isError, body } = await call(client, 'tgbp_x402_pay', {
+      url: `${paid.url}/quote`,
+      maxPence: 5,
+      reason: 'a quote for the user',
+    })
+    expect(isError).toBe(true)
+    expect(body.details.rule).toBe('firstPayment')
+    expect(body.message).toContain('approval required')
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(await ledger()).toBe('')
+  })
+
+  it('asks only before the first payment to a service', async () => {
+    const quote = { url: `${paid.url}/quote`, maxPence: 5, reason: 'a quote for the user' }
+    expect((await call(await connectX402(), 'tgbp_x402_pay', quote)).isError).toBe(false)
+    // A client that would say no is never asked: the service is approved.
+    const declining = await connectX402(x402Policy(), 'decline')
+    expect((await call(declining, 'tgbp_x402_pay', quote)).isError).toBe(false)
+    const [first, second] = (await ledger())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(first).toMatchObject({ firstPayment: true, category: 'quotes' })
+    expect(second.firstPayment).toBeUndefined()
+  })
+
+  it('refuses a URL on no listed service, and signs nothing', async () => {
+    const policy = x402Policy()
+    const x402 = { ...policy.x402, services: [{ match: 'quotes.example.com', category: 'quotes' }] }
+    const { body } = await call(
+      await connectX402({ ...policy, x402 } as SpendPolicy),
+      'tgbp_x402_pay',
+      { url: `${paid.url}/quote`, maxPence: 5, reason: 'a quote for the user' },
+    )
+    expect(body.details.rule).toBe('services')
+    expect(signTypedData).not.toHaveBeenCalled()
   })
 
   it('refuses a payment with no reason before any request', async () => {
