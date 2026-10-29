@@ -516,11 +516,13 @@ describe('tgbp_x402_pay', () => {
   it.each([
     ['the human says no', 'decline' as const],
     ['the client cannot ask', undefined],
+    ['nobody answers in time', 'never' as const],
   ])('refuses the first payment to a service when %s, and signs nothing', async (_, elicit) => {
     const client = await connect({
       ...(elicit ? { elicit } : {}),
       server: {
         policy: x402Policy(),
+        approvalTimeoutMs: 50,
         evm: x402Evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
       },
     })
@@ -534,6 +536,20 @@ describe('tgbp_x402_pay', () => {
     expect(body.message).toContain('approval required')
     expect(signTypedData).not.toHaveBeenCalled()
     expect(await ledger()).toBe('')
+  })
+
+  it('asks only before the first payment to a service', async () => {
+    const quote = { url: `${paid.url}/quote`, maxPence: 5, reason: 'a quote for the user' }
+    expect((await call(await connectX402(), 'tgbp_x402_pay', quote)).isError).toBe(false)
+    // A client that would say no is never asked: the service is approved.
+    const declining = await connectX402(x402Policy(), 'decline')
+    expect((await call(declining, 'tgbp_x402_pay', quote)).isError).toBe(false)
+    const [first, second] = (await ledger())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(first).toMatchObject({ firstPayment: true, category: 'quotes' })
+    expect(second.firstPayment).toBeUndefined()
   })
 
   it('refuses a URL on no listed service, and signs nothing', async () => {

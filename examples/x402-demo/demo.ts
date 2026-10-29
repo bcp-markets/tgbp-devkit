@@ -167,7 +167,10 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
     evm: () => ({ publicClient, walletClient }),
   })
   // The server asks the owner through the MCP client before the first payment to a service.
-  const client = new Client({ name: 'x402-demo', version: '0' }, { capabilities: { elicitation: {} } })
+  const client = new Client(
+    { name: 'x402-demo', version: '0' },
+    { capabilities: { elicitation: {} } },
+  )
   client.setRequestHandler(ElicitRequestSchema, async () => ({
     action: 'accept',
     content: { approve: await approveFirstPayment() },

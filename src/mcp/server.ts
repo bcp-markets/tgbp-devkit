@@ -71,8 +71,8 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
             'Approve this redemption',
           ]
         : [
-            // The reason is the agent's own words; the human reads it as a claim, not a fact.
-            `An agent asks to pay ${request.amount} tGBP on ${request.chain} for ${request.url}, ` +
+            // The URL and reason are the agent's own words, quoted so the human reads them as claims.
+            `An agent asks to pay ${request.amount} tGBP on ${request.chain} for ${JSON.stringify(request.url)}, ` +
               `its first payment to the x402 service "${request.service}" (budget ` +
               `"${request.category}"). The agent says: ${JSON.stringify(request.reason)}. Your ` +
               'spend policy needs a human to approve the first payment to each service. Approve it?',
