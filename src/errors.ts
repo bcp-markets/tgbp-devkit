@@ -51,6 +51,11 @@ export type TgbpErrorCode =
    * before retrying, because a retry may pay twice.
    */
   | 'PAYMENT_UNCONFIRMED'
+  /**
+   * The test tGBP faucet sent nothing. `details.reason` says why; a rate limit also carries
+   * `details.retryAfterSeconds`.
+   */
+  | 'FAUCET_REFUSED'
 
 export class TgbpKitError extends Error {
   readonly code: TgbpErrorCode

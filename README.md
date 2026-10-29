@@ -390,6 +390,27 @@ is what the facilitator reported, so read its transaction receipt before you tre
 [`examples/x402-demo`](examples/x402-demo) runs the whole flow on Base Sepolia: an agent pays 5p
 for an API call from a wallet that holds no ETH.
 
+## Test tGBP faucet (Base Sepolia)
+
+The faucet sends 10 test tGBP on Base Sepolia, once every 24 hours per address and per network
+(an IPv4 address, or an IPv6 /64). It funds no other chain, and stops for the day after 200 drips.
+
+```sh
+npx -p @bcptechnologies/tgbp-kit tgbp-faucet 0xYourAddress
+```
+
+```ts
+import { requestTestTgbp } from '@bcptechnologies/tgbp-kit/faucet'
+
+const { hash, explorerUrl } = await requestTestTgbp({ address: '0xYourAddress' })
+```
+
+A refusal throws `FAUCET_REFUSED`. `details.reason` is `rate_limited`, `daily_limit`,
+`wrong_chain`, `invalid_request` or `unavailable`, and a rate limit carries
+`details.retryAfterSeconds`. A drip with `confirmed: false` was broadcast but its receipt was
+late: check `explorerUrl` before you ask again. The
+[quickstart](https://dev.tokenisedgbp.com/quickstart#fund) has the same faucet as a form.
+
 ## Errors
 
 Failures the kit can explain throw a `TgbpKitError` with a `code`:
@@ -408,6 +429,7 @@ Failures the kit can explain throw a `TgbpKitError` with a `code`:
 | `PAYMENT_OVER_LIMIT` | An x402 price is above the client's `maxPencePerRequest`. |
 | `PAYMENT_REFUSED` | The x402 server rejected a signed payment; `details.reason` says why. |
 | `PAYMENT_UNCONFIRMED` | The client signed an x402 payment, but no matching settlement came back. |
+| `FAUCET_REFUSED` | The test tGBP faucet sent nothing. `details.reason` says why. |
 
 After a 5xx or `API_UNREACHABLE`, a create may have taken effect. Retry it only with
 `error.details.idempotencyKey`, or read the record before you send anything new.
@@ -462,14 +484,18 @@ environment.
 
 ## Developer site
 
-`site/` is <https://dev.tokenisedgbp.com>: static pages served by a Cloudflare Worker with no
-script, only assets. The quickstart pages embed the scripts in `examples/quickstart/` and
+`site/` is <https://dev.tokenisedgbp.com>: static pages served by a Cloudflare Worker. Its script
+runs only for `/api/*`, which is the test tGBP faucet (`site/worker/`). A Durable Object runs one
+drip at a time and keeps the rate limits. The faucet wallet's key is a Worker secret,
+`FAUCET_PRIVATE_KEY`, and `FAUCET_RPC_URL` overrides Base's public RPC. The wallet is a fresh key
+with no role on the token, and holds only test tGBP and a little Base Sepolia ETH for gas. The quickstart pages embed the scripts in `examples/quickstart/` and
 `examples/python-quickstart/` verbatim, and
 `test/site.test.ts` fails when they drift apart or when a page is missing from `llms.txt`.
 
 ```sh
 pnpm dlx wrangler@4.119.0 dev --cwd site      # serve locally
 pnpm dlx wrangler@4.119.0 deploy --cwd site   # publish; needs Cloudflare access
+pnpm dlx wrangler@4.119.0 secret put FAUCET_PRIVATE_KEY --cwd site   # the faucet wallet's key
 ```
 
 ## Support

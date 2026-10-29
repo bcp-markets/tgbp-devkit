@@ -113,6 +113,7 @@ async function fundWithCast(keystoreAccount: string): Promise<`0x${string}`> {
 
 async function waitForFunding(): Promise<void> {
   console.log(`Send ${formatAmount(price, token.decimals)} test tGBP to ${account.address}`)
+  console.log(`  npx -p @bcptechnologies/tgbp-kit tgbp-faucet ${account.address}`)
   const deadline = Date.now() + 15 * 60_000
   while (Date.now() < deadline) {
     try {

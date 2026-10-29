@@ -1,7 +1,7 @@
 {
   "name": "@bcptechnologies/tgbp-kit",
   "version": "0.0.0-tagged",
-  "description": "tGBP, the tokenised British pound, for developers: token registry, on-chain balances, transfers and watchers on EVM chains and Solana, a typed client for the mint, redeem and swap API, and an MCP server and agent skills with a client-side spend policy.",
+  "description": "tGBP, the tokenised British pound, for developers: token registry, on-chain balances, transfers and watchers on EVM chains and Solana, a typed client for the mint, redeem and swap API, an MCP server and agent skills with a client-side spend policy, and a test tGBP faucet.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -65,10 +65,15 @@
     "./x402/client": {
       "types": "./dist/x402/client.d.ts",
       "import": "./dist/x402/client.js"
+    },
+    "./faucet": {
+      "types": "./dist/faucet/index.d.ts",
+      "import": "./dist/faucet/index.js"
     }
   },
   "bin": {
-    "tgbp-mcp": "dist/mcp/cli.js"
+    "tgbp-mcp": "dist/mcp/cli.js",
+    "tgbp-faucet": "dist/faucet/cli.js"
   },
   "sideEffects": false,
   "scripts": {
