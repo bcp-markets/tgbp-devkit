@@ -11,7 +11,10 @@
  * keystore password) and the payment goes back to the same address.
  */
 import { spawn } from 'node:child_process'
+import { mkdtemp, rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import express from 'express'
 import {
@@ -26,6 +29,7 @@ import {
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
 
+import { createSpendGuard } from '../../src/agent/guard.js'
 import { formatAmount } from '../../src/amount.js'
 import { tgbpAbi } from '../../src/evm/abi.js'
 import { createTgbpPaymentFetch } from '../../src/x402/client.js'
@@ -149,9 +153,32 @@ async function main(): Promise<void> {
   })
   const { port } = server.address() as AddressInfo
 
+  // A spend policy for this run only: one 5p x402 payment to the payee, today.
+  const ledgerDir = await mkdtemp(join(tmpdir(), 'tgbp-x402-demo-'))
+  const guard = createSpendGuard({
+    policy: {
+      version: 1,
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      actions: ['x402'],
+      chains: [token.chain],
+      destinations: [payTo],
+      perTransferCap: formatAmount(price, token.decimals),
+      dailyCap: formatAmount(price, token.decimals),
+      redemptionApprovalAbove: '0',
+    },
+    ledgerPath: join(ledgerDir, 'ledger.jsonl'),
+  })
+
   try {
-    const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: PENCE })
-    const { response, settlement } = await pay(`http://127.0.0.1:${port}/quote`)
+    const pay = createTgbpPaymentFetch({
+      publicClient,
+      walletClient,
+      maxPencePerRequest: PENCE,
+      guard,
+    })
+    const { response, settlement } = await pay(`http://127.0.0.1:${port}/quote`, undefined, {
+      reason: 'a sterling quote',
+    })
     const hash = settlement?.transaction
     console.log(`Settlement: ${token.explorerUrl}/tx/${hash}`)
     console.log(`API response ${response.status}:`, await response.text())
@@ -179,9 +206,14 @@ async function main(): Promise<void> {
       (await publicClient.getBalance({ address: account.address })) === 0n,
       'the payer still holds 0 ETH: the facilitator paid the gas',
     )
+    check(
+      (await guard.budget()).remaining === '0',
+      'the spend ledger counted the payment against the daily cap',
+    )
   } finally {
     server.closeAllConnections()
     server.close()
+    await rm(ledgerDir, { recursive: true, force: true })
   }
 }
 

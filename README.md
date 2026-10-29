@@ -196,7 +196,7 @@ See the [Python README](python/README.md) and the
 
 `tgbp-mcp` is an MCP server that lets an LLM agent read balances, send, mint, redeem and swap tGBP.
 Every tool runs behind a **Know Your Agent spend policy**: a JSON file that denies anything it
-does not allow.
+does not allow. The [x402 client](#x402-payments-base-sepolia) runs behind the same policy.
 
 > **The policy is enforced client-side.** The kit checks it inside the MCP server's process,
 > before it signs or calls the API. tGBP API keys carry no scopes, so anyone who holds the API key
@@ -207,7 +207,7 @@ does not allow.
 {
   "version": 1,
   "expiresAt": "2026-12-31T23:59:59Z",
-  "actions": ["balance", "transfer", "mint", "redeem", "swap"],
+  "actions": ["balance", "transfer", "mint", "redeem", "swap", "x402"],
   "chains": ["sepolia"],
   "destinations": ["0x70997970C51812dc3A010C7d01b50e0d17dc79C8", "bank_…"],
   "perTransferCap": "100.00",
@@ -225,15 +225,17 @@ the same number of pounds.
 | `expiresAt` | Every action after this time. |
 | `actions` | Any action not listed. |
 | `chains` | Any registry chain key not listed. |
-| `destinations` | Transfer and swap recipients, mint destinations and redemption bank ids not listed. EVM addresses match whatever their case. |
-| `perTransferCap` | One transfer, mint, redemption or swap above this amount. |
+| `destinations` | Transfer and swap recipients, mint destinations, redemption bank ids and x402 payees not listed. EVM addresses match whatever their case. |
+| `perTransferCap` | One transfer, mint, redemption, swap or x402 payment above this amount. |
 | `dailyCap` | An action that would take the UTC day's total above this amount. |
 | `redemptionApprovalAbove` | A redemption above this amount, unless a human approves it. |
 
 A refused action returns `SPEND_POLICY_DENIED` with the rule, before anything is signed or sent.
 
-**Daily spend ledger.** The server records every allowed transfer, mint, redemption and swap in an
-append-only JSON Lines file, before it signs or sends. An action that then fails stays counted, so
+**Daily spend ledger.** The kit records every allowed transfer, mint, redemption, swap and x402
+payment in an append-only JSON Lines file, before it signs or sends. An x402 entry also records the
+URL, the price in pence and the agent's reason. `guard.budget()` reads the day's spend and what is
+left under the daily cap. An action that then fails stays counted, so
 the ledger may overstate the day's spend but never understate it. If the ledger cannot be read or
 written, every value-moving action is refused with `rule: 'ledger'`. A lock file stops two
 processes that share a ledger from both spending the last of the cap. The kit never breaks a lock
@@ -332,12 +334,26 @@ app.get('/quote', (req, res) => res.json({ quote: '…' }))
 ```
 
 ```ts
+import { createSpendGuard, loadSpendPolicy } from '@bcptechnologies/tgbp-kit/agent'
 import { createTgbpPaymentFetch } from '@bcptechnologies/tgbp-kit/x402/client'
 
-const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: 10 })
-const { response, settlement } = await pay('https://api.example.com/quote')
+const guard = createSpendGuard({
+  policy: await loadSpendPolicy('spend-policy.json'), // allows "x402" on "base-sepolia"
+  ledgerPath: 'spend-policy.ledger.jsonl',
+})
+const pay = createTgbpPaymentFetch({ publicClient, walletClient, maxPencePerRequest: 10, guard })
+const { response, settlement } = await pay('https://api.example.com/quote', undefined, {
+  reason: 'a quote the user asked for',
+})
 console.log(await response.json(), settlement?.transaction) // the Base Sepolia tx hash
+console.log(await guard.budget()) // { day, dailyCap, spent, remaining }, in pounds
 ```
+
+Every payment runs through the [spend policy](#agents-mcp-server-skills-and-spend-policy) before
+it is signed. The policy must allow the `x402` action, the chain and the payee, and the price
+counts against `perTransferCap` and the same `dailyCap` as the agent's transfers, mints,
+redemptions and swaps. Each payment needs a `reason`, which goes into the spend ledger with the
+URL, the price in pence and the payee. A refusal throws `SPEND_POLICY_DENIED` and signs nothing.
 
 tGBP supports EIP-2612 `permit` but not EIP-3009, so payments use the x402 exact scheme's
 Permit2 method. The route also offers the `eip2612GasSponsoring` extension. With it, the payer

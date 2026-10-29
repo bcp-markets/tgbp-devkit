@@ -5,12 +5,14 @@
 1. It makes a fresh payer key in memory and checks that the payer holds 0 ETH.
 2. The payer receives 5p of test tGBP.
 3. A local Express server prices `GET /quote` at 5p with `tgbpPaymentMiddleware`.
-4. The agent calls `/quote` with `createTgbpPaymentFetch`. It gets HTTP 402, signs an EIP-2612
-   permit for Permit2 and a Permit2 transfer, and sends the request again with the payment.
+4. The agent calls `/quote` with `createTgbpPaymentFetch`. It gets HTTP 402, and its spend
+   guard allows the 5p and records it in the spend ledger. It signs an EIP-2612 permit for
+   Permit2 and a Permit2 transfer, and sends the request again with the payment.
 5. The x402.org facilitator settles the payment on Base Sepolia and pays the gas. The server
    returns the quote.
 6. The script checks the settlement on chain: the payer paid exactly 5p, the payee received 5p,
-   and the payer still holds 0 ETH. It exits 1 if any check fails.
+   and the payer still holds 0 ETH. It checks that the 5p used up the run's daily cap, too. It
+   exits 1 if any check fails.
 
 ## Run it
 

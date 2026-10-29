@@ -24,7 +24,7 @@ const NOW = new Date('2026-10-21T12:00:00Z')
 const POLICY: SpendPolicy = {
   version: 1,
   expiresAt: '2026-12-31T23:59:59Z',
-  actions: ['balance', 'transfer', 'mint', 'redeem', 'swap'],
+  actions: ['balance', 'transfer', 'mint', 'redeem', 'swap', 'x402'],
   chains: ['sepolia'],
   destinations: [ALICE, 'bank_ok'],
   perTransferCap: '100',
@@ -34,6 +34,14 @@ const POLICY: SpendPolicy = {
 
 const transfer = (amount: string, extra: Partial<SpendRequest> = {}): SpendRequest =>
   ({ action: 'transfer', chain: 'sepolia', destination: ALICE, amount, ...extra }) as SpendRequest
+const x402 = (amount: string, reason = 'a weather report'): SpendRequest => ({
+  action: 'x402',
+  chain: 'sepolia',
+  destination: ALICE,
+  amount,
+  url: 'https://api.example.com/weather',
+  reason,
+})
 const redeem = (amount: string): SpendRequest => ({
   action: 'redeem',
   chain: 'sepolia',
@@ -167,9 +175,61 @@ describe('createSpendGuard', () => {
     await expect(readFile(ledgerPath)).rejects.toThrow()
   })
 
+  it('records an x402 payment with its URL, price in pence, payee, reason and time', async () => {
+    await guard().authorize(x402('0.05'))
+    const [line] = (await readFile(ledgerPath, 'utf8')).trim().split('\n')
+    expect(JSON.parse(line ?? '')).toEqual({
+      at: NOW.toISOString(),
+      day: '2026-10-21',
+      action: 'x402',
+      chain: 'sepolia',
+      destination: ALICE,
+      amount: '0.05',
+      url: 'https://api.example.com/weather',
+      pence: '5',
+      reason: 'a weather report',
+    })
+  })
+
+  it('counts x402 payments against the same daily cap as transfers', async () => {
+    await guard().authorize(transfer('100'))
+    await guard().authorize(x402('49.99'))
+    expect(await refusal(guard().authorize(x402('0.02')))).toBe('dailyCap')
+  })
+
+  it('refuses an x402 payment that gives no reason, and records nothing', async () => {
+    await expect(guard().authorize(x402('0.05', ' '))).rejects.toThrow(RangeError)
+    await expect(readFile(ledgerPath)).rejects.toThrow()
+  })
+
   it('leaves balance reads out of the ledger', async () => {
     await guard().authorize({ action: 'balance', chain: 'sepolia' })
     await expect(readFile(ledgerPath)).rejects.toThrow()
+  })
+})
+
+describe('budget', () => {
+  it('reports what is left under the daily cap, before and after spending', async () => {
+    const g = guard()
+    await expect(g.budget()).resolves.toEqual({
+      day: '2026-10-21',
+      dailyCap: '150',
+      spent: '0',
+      remaining: '150',
+    })
+    await g.authorize(transfer('40'))
+    await g.authorize(x402('0.05'))
+    await expect(g.budget()).resolves.toMatchObject({ spent: '40.05', remaining: '109.95' })
+  })
+
+  it('reports nothing left once the policy has expired', async () => {
+    const g = guard({ now: () => new Date('2027-01-01T00:00:00Z') })
+    await expect(g.budget()).resolves.toMatchObject({ remaining: '0' })
+  })
+
+  it('throws when the ledger cannot be read', async () => {
+    await mkdir(ledgerPath)
+    await expect(guard().budget()).rejects.toThrow(ledgerPath)
   })
 })
 

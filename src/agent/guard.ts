@@ -31,12 +31,24 @@ export type SpendPolicyRule =
 export type SpendRequest =
   | { action: 'balance'; chain: string }
   | {
-      action: Exclude<SpendAction, 'balance'>
+      action: Exclude<SpendAction, 'balance' | 'x402'>
       chain: string
       /** Recipient address, mint destination address, or redemption bank id. */
       destination: string
       /** Pounds, as a decimal string. */
       amount: string
+    }
+  | {
+      action: 'x402'
+      chain: string
+      /** The payee address. */
+      destination: string
+      /** Pounds, as a decimal string. */
+      amount: string
+      /** The URL paid for. */
+      url: string
+      /** Why the agent is paying. Required, because the ledger records it. */
+      reason: string
     }
 
 export interface ApprovalRequest {
@@ -69,10 +81,23 @@ export interface SpendGuardOptions {
   now?: () => Date
 }
 
+/** Pounds, as decimal strings. */
+export interface SpendBudget {
+  /** The UTC day, `YYYY-MM-DD`. */
+  day: string
+  dailyCap: string
+  /** What the ledger records as spent today. */
+  spent: string
+  /** What the agent may still spend today: `0` once the policy has expired. */
+  remaining: string
+}
+
 export interface SpendGuard {
   readonly policy: SpendPolicy
   /** Resolves once the action is allowed and recorded; throws `SPEND_POLICY_DENIED` otherwise. */
   authorize(request: SpendRequest): Promise<void>
+  /** Today's spend against the daily cap. Throws if the ledger cannot be read. */
+  budget(): Promise<SpendBudget>
 }
 
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000
@@ -112,6 +137,12 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     if (request.action === 'balance') return
 
     const { destination } = request
+    if (
+      request.action === 'x402' &&
+      (typeof request.reason !== 'string' || request.reason.trim() === '')
+    ) {
+      throw new RangeError('an x402 payment needs a reason')
+    }
     if (!policy.destinations.some((allowed) => sameDestination(allowed, destination))) {
       throw denied('destinations', `"${destination}" is not an allowed destination`, request)
     }
@@ -156,6 +187,13 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
       chain: request.chain,
       destination,
       amount: formatAmount(amount, POLICY_DECIMALS),
+      ...(request.action === 'x402'
+        ? {
+            url: request.url,
+            pence: formatAmount(amount, POLICY_DECIMALS - 2),
+            reason: request.reason,
+          }
+        : {}),
     }
     let result: Awaited<ReturnType<SpendLedger['reserve']>>
     try {
@@ -204,7 +242,25 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     )
   }
 
-  return { policy, authorize }
+  async function budget(): Promise<SpendBudget> {
+    const at = now()
+    const day = utcDay(at)
+    let spent: bigint
+    try {
+      spent = await ledger.spentOn(day)
+    } catch (error) {
+      throw new Error(`Cannot read the spend ledger ${ledger.path}`, { cause: error })
+    }
+    const left = at.getTime() >= expiresAt || spent >= dailyCap ? 0n : dailyCap - spent
+    return {
+      day,
+      dailyCap: formatAmount(dailyCap, POLICY_DECIMALS),
+      spent: formatAmount(spent, POLICY_DECIMALS),
+      remaining: formatAmount(left, POLICY_DECIMALS),
+    }
+  }
+
+  return { policy, authorize, budget }
 }
 
 function denied(

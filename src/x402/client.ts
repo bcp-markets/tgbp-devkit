@@ -9,6 +9,8 @@ import { type ClientEvmSigner, PERMIT2_ADDRESS } from '@x402/evm'
 import { ExactEvmScheme } from '@x402/evm/exact/client'
 import { getAddress, isAddress, type PublicClient, type WalletClient, zeroAddress } from 'viem'
 
+import type { SpendGuard } from '../agent/guard.js'
+import { formatAmount } from '../amount.js'
 import { TgbpKitError } from '../errors.js'
 import { tgbpAbi } from '../evm/abi.js'
 import { assertCanTransfer } from '../evm/checks.js'
@@ -35,10 +37,21 @@ export interface TgbpPaymentFetchOptions {
   walletClient: WalletClient
   /** The most the client pays for one request, in whole pence. */
   maxPencePerRequest: number | bigint
+  /**
+   * The spend guard every payment must pass before it is signed. Its policy
+   * must allow the `x402` action, the token's chain and the payee, and its
+   * daily cap counts x402 payments with every other action it guards.
+   */
+  guard: SpendGuard
   /** Defaults to tGBP on Base Sepolia. */
   token?: EvmTokenDeployment
   /** Defaults to the global `fetch`. */
   fetch?: typeof fetch
+}
+
+export interface TgbpPaymentContext {
+  /** Why the agent is paying. The spend ledger records it; a paid route refuses without one. */
+  reason: string
 }
 
 export interface TgbpPaidResponse {
@@ -66,6 +79,11 @@ export interface TgbpPaidResponse {
  * `maxPencePerRequest`, and an offer whose signature would stay valid longer
  * than `MAX_PAYMENT_WINDOW_SECONDS`.
  *
+ * Last before signing, it asks `guard`, which refuses with
+ * `SPEND_POLICY_DENIED` or records the payment in the spend ledger with its
+ * URL, price, payee and `payment.reason`. A payment that then fails stays
+ * counted, so the ledger may overstate the day's spend but never understate it.
+ *
  * After signing, any outcome other than a reported settlement throws
  * `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`. Neither proves the payment did
  * not happen: the signature stays valid until `details.deadline`. Retrying
@@ -80,10 +98,12 @@ export function createTgbpPaymentFetch({
   walletClient,
   maxPencePerRequest,
   token = TGBP_BASE_SEPOLIA,
+  guard,
   fetch: fetchFn = globalThis.fetch,
 }: TgbpPaymentFetchOptions): (
   input: string | URL | Request,
   init?: RequestInit,
+  payment?: TgbpPaymentContext,
 ) => Promise<TgbpPaidResponse> {
   const account = walletClient.account
   if (!account) throw new Error('walletClient has no account; create it with `account`')
@@ -105,7 +125,11 @@ export function createTgbpPaymentFetch({
   })
   const http = new x402HTTPClient(client)
 
-  async function pay(input: string | URL | Request, init?: RequestInit): Promise<TgbpPaidResponse> {
+  async function pay(
+    input: string | URL | Request,
+    init: RequestInit | undefined,
+    payment: TgbpPaymentContext | undefined,
+  ): Promise<TgbpPaidResponse> {
     const request = new Request(input, init)
     const first = await fetchFn(request.clone())
     if (first.status !== 402) return { response: first }
@@ -157,6 +181,16 @@ export function createTgbpPaymentFetch({
         )
       }
     }
+
+    // Last, so the ledger never records a payment that the checks above refused.
+    await guard.authorize({
+      action: 'x402',
+      chain: token.chain,
+      destination: payTo,
+      amount: formatAmount(amount, token.decimals),
+      url,
+      reason: payment?.reason ?? '',
+    })
 
     const payload = await http.createPaymentPayload({ ...paymentRequired, accepts: [offer] })
     const signed = {
@@ -243,8 +277,8 @@ export function createTgbpPaymentFetch({
   }
 
   let queue: Promise<unknown> = Promise.resolve()
-  return (input, init) => {
-    const result = queue.then(() => pay(input, init))
+  return (input, init, payment) => {
+    const result = queue.then(() => pay(input, init, payment))
     // The queue only orders calls; each caller still sees its own rejection.
     queue = result.then(
       () => undefined,

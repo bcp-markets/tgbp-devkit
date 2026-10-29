@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises'
 
 import { parseAmount } from '../amount.js'
 
-export const SPEND_ACTIONS = ['balance', 'transfer', 'mint', 'redeem', 'swap'] as const
+export const SPEND_ACTIONS = ['balance', 'transfer', 'mint', 'redeem', 'swap', 'x402'] as const
 export type SpendAction = (typeof SPEND_ACTIONS)[number]
 
 /** Policy amounts are held at 18 decimals, so any chain's tGBP amount compares exactly. */
@@ -25,10 +25,11 @@ export interface SpendPolicy {
   chains: string[]
   /**
    * Where value may go: transfer and swap recipients, mint destination
-   * addresses, and redemption bank ids. EVM addresses match case-insensitively.
+   * addresses, redemption bank ids, and x402 payees. EVM addresses match
+   * case-insensitively.
    */
   destinations: string[]
-  /** The most one transfer, mint, redemption or swap may move, in pounds. */
+  /** The most one transfer, mint, redemption, swap or x402 payment may move, in pounds. */
   perTransferCap: string
   /** The most all of them together may move in one UTC day, in pounds. */
   dailyCap: string

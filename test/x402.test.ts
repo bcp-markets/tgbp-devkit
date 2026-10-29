@@ -3,7 +3,10 @@
  * on a local anvil chain with MockTgbp, so pause, ban and balance checks read
  * real contract state.
  */
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { FacilitatorClient } from '@x402/core/server'
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types'
 import express from 'express'
@@ -21,6 +24,8 @@ import {
 import { foundry } from 'viem/chains'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
+import { createSpendGuard, type SpendGuard, type SpendPolicy } from '../src/agent/index.js'
+import { isTgbpKitError } from '../src/errors.js'
 import type { EvmTokenDeployment } from '../src/evm/index.js'
 import { createTgbpPaymentFetch } from '../src/x402/client.js'
 import { TGBP_BASE_SEPOLIA, tgbpPaymentMiddleware, tgbpPrice } from '../src/x402/server.js'
@@ -193,6 +198,21 @@ describe('createTgbpPaymentFetch', () => {
   let token: EvmTokenDeployment
   let fake: ReturnType<typeof fakeFacilitator>
   let server: Awaited<ReturnType<typeof serve>>
+  let dir: string
+  let ledgerPath: string
+  let guard: SpendGuard
+
+  /** Pays x402 to PAY_TO on anvil, up to 15p a day. */
+  const policy = (): SpendPolicy => ({
+    version: 1,
+    expiresAt: '2099-01-01T00:00:00Z',
+    actions: ['transfer', 'x402'],
+    chains: ['anvil'],
+    destinations: [PAY_TO],
+    perTransferCap: '0.10',
+    dailyCap: '0.15',
+    redemptionApprovalAbove: '0',
+  })
 
   beforeAll(async () => {
     anvil = await startAnvil()
@@ -243,9 +263,16 @@ describe('createTgbpPaymentFetch', () => {
     app.get('/broken', (_req, res) => res.status(500).json({ error: 'handler failed' }))
     app.get('/free', (_req, res) => res.json({ quote: 'free' }))
     server = await serve(app)
+
+    dir = await mkdtemp(join(tmpdir(), 'tgbp-x402-'))
+    ledgerPath = join(dir, 'policy.ledger.jsonl')
+    guard = createSpendGuard({ policy: policy(), ledgerPath })
   })
 
-  afterEach(() => server.close())
+  afterEach(async () => {
+    await server.close()
+    await rm(dir, { recursive: true, force: true })
+  })
 
   /** Valid terms for the anvil token, for a test to spoil one field of. */
   const terms = (
@@ -284,8 +311,19 @@ describe('createTgbpPaymentFetch', () => {
     await publicClient.waitForTransactionReceipt({ hash })
   }
 
-  const pay = (maxPencePerRequest = 10) =>
-    createTgbpPaymentFetch({ publicClient, walletClient: payerWallet, maxPencePerRequest, token })
+  const REASON = { reason: 'a quote for the user' }
+
+  /** A payment fetch that gives every payment a reason. */
+  const pay = (maxPencePerRequest = 10, spendGuard = guard) => {
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: payerWallet,
+      maxPencePerRequest,
+      token,
+      guard: spendGuard,
+    })
+    return (input: string, init?: RequestInit) => fetchPaid(input, init, REASON)
+  }
 
   it('pays 5p through Permit2 with an EIP-2612 permit for Permit2, and returns the settlement', async () => {
     const { response, settlement } = await pay()(`${server.url}/quote`)
@@ -365,8 +403,9 @@ describe('createTgbpPaymentFetch', () => {
       walletClient: emptyWallet,
       maxPencePerRequest: 10,
       token,
+      guard,
     })
-    await expect(payFromEmpty(`${server.url}/quote`)).rejects.toMatchObject({
+    await expect(payFromEmpty(`${server.url}/quote`, undefined, REASON)).rejects.toMatchObject({
       code: 'INSUFFICIENT_BALANCE',
     })
   })
@@ -403,8 +442,9 @@ describe('createTgbpPaymentFetch', () => {
       walletClient: payerWallet,
       maxPencePerRequest: 10,
       token: { ...token, address: PAY_TO },
+      guard,
     })
-    await expect(wrongToken(`${server.url}/quote`)).rejects.toMatchObject({
+    await expect(wrongToken(`${server.url}/quote`, undefined, REASON)).rejects.toMatchObject({
       code: 'PAYMENT_NOT_OFFERED',
     })
   })
@@ -476,6 +516,96 @@ describe('createTgbpPaymentFetch', () => {
     } finally {
       await crafted.close()
     }
+  })
+
+  it('signs nothing when the spend guard refuses the payment', async () => {
+    const signed: unknown[] = []
+    const counting = {
+      ...payerWallet,
+      signTypedData: (args: never) => {
+        signed.push(args)
+        return payerWallet.signTypedData(args)
+      },
+    } as WalletClient
+    const noX402 = createSpendGuard({
+      policy: { ...policy(), actions: ['transfer'] },
+      ledgerPath,
+    })
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: counting,
+      maxPencePerRequest: 10,
+      token,
+      guard: noX402,
+    })
+    const error = await fetchPaid(`${server.url}/quote`, undefined, REASON).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'SPEND_POLICY_DENIED') && error.details.rule).toBe('actions')
+    expect(signed).toHaveLength(0)
+    expect(fake.calls.verify).toHaveLength(0)
+    await expect(readFile(ledgerPath)).rejects.toThrow()
+
+    // The same wallet does sign once the guard allows it, so the count above means something.
+    await createTgbpPaymentFetch({
+      publicClient,
+      walletClient: counting,
+      maxPencePerRequest: 10,
+      token,
+      guard,
+    })(`${server.url}/quote`, undefined, REASON)
+    expect(signed.length).toBeGreaterThan(0)
+  })
+
+  it('signs nothing for a payment that gives no reason', async () => {
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: payerWallet,
+      maxPencePerRequest: 10,
+      token,
+      guard,
+    })
+    await expect(fetchPaid(`${server.url}/quote`)).rejects.toThrow(RangeError)
+    expect(fake.calls.verify).toHaveLength(0)
+  })
+
+  it('refuses the payment that would pass the daily cap, counting other kit spend', async () => {
+    await guard.authorize({
+      action: 'transfer',
+      chain: 'anvil',
+      destination: PAY_TO,
+      amount: '0.05',
+    })
+    const payOnce = pay()
+    await payOnce(`${server.url}/quote`)
+    await payOnce(`${server.url}/quote`)
+    const error = await payOnce(`${server.url}/quote`).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'SPEND_POLICY_DENIED') && error.details).toMatchObject({
+      rule: 'dailyCap',
+      spentToday: '0.15',
+    })
+    expect(fake.calls.settle).toHaveLength(2)
+  })
+
+  it('writes a ledger entry for each payment: URL, pence, payee, reason and time', async () => {
+    const before = Date.now()
+    await pay()(`${server.url}/quote`)
+    const [line] = (await readFile(ledgerPath, 'utf8')).trim().split('\n')
+    const entry = JSON.parse(line ?? '')
+    expect(entry).toMatchObject({
+      action: 'x402',
+      chain: 'anvil',
+      url: `${server.url}/quote`,
+      pence: '5',
+      amount: '0.05',
+      destination: PAY_TO,
+      reason: REASON.reason,
+    })
+    expect(Date.parse(entry.at)).toBeGreaterThanOrEqual(before - 1000)
+  })
+
+  it('lowers the remaining budget by the price of a payment', async () => {
+    await expect(guard.budget()).resolves.toMatchObject({ spent: '0', remaining: '0.15' })
+    await pay()(`${server.url}/quote`)
+    await expect(guard.budget()).resolves.toMatchObject({ spent: '0.05', remaining: '0.1' })
   })
 
   it('throws PAYMENT_NOT_OFFERED when a 402 carries no x402 terms', async () => {
