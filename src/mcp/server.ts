@@ -182,12 +182,17 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     }
     if (!acceptsTask(ctx.mcpReq.envelope)) return run(() => prepared.submit())
     const task = taskStore.start(
-      async () => ok(await prepared.submit()),
+      // Held open until the client reads the result, so a retry before then resends the key.
+      async () => ok(await prepared.submit({ holdOpen: true })),
       (error) => ({
         code: ProtocolErrorCode.InternalError,
         message: plainMessage(error),
-        data: { ...errorBody(error), idempotencyKey: prepared.idempotencyKey },
+        // Through the same encoder as a tool result: error details can hold bigints.
+        data: JSON.parse(
+          toJson({ ...errorBody(error), idempotencyKey: prepared.idempotencyKey }),
+        ) as Record<string, unknown>,
       }),
+      () => prepared.release(),
     )
     return taskResult(task)
   }

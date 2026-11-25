@@ -859,6 +859,46 @@ describe('tasks on a 2026-07-28 connection', () => {
     expectNothingSent()
   })
 
+  it('keeps the key until the client reads the result, then frees the inputs', async () => {
+    const args = { chain: 'sepolia', destinationAddress: AGENT, amount: '10' }
+    const keys = () =>
+      api.mints.create.mock.calls.map(
+        (c) => (c as unknown as [unknown, { idempotencyKey: string }])[1].idempotencyKey,
+      )
+    const tasks = await connectTasks()
+    await expect(tasks.client.callTool({ name: 'tgbp_mint', arguments: args })).rejects.toThrow()
+    await vi.waitFor(() => expect(api.mints.create).toHaveBeenCalledTimes(1))
+    // The result was never read: a retry resends the same key.
+    await call(await connect(), 'tgbp_mint', args)
+    expect(keys()[1]).toBe(keys()[0])
+    // Once a result is read, the same inputs are a new mint.
+    expect((await callTask(await connectTasks(), 'tgbp_mint', args)).status).toBe('completed')
+    await call(await connect(), 'tgbp_mint', args)
+    expect(keys()[3]).not.toBe(keys()[2])
+  })
+
+  it('fails a redemption task with its id when the burn fails, bigint details and all', async () => {
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    chain.transfer.mockRejectedValueOnce(
+      new TgbpKitError('INSUFFICIENT_BALANCE', 'too little', {
+        details: { balance: 1n, needed: 50n },
+      }),
+    )
+    const task = await callTask(await connectTasks(), 'tgbp_redeem', {
+      chain: 'sepolia',
+      bankId: 'bank_ok',
+      amount: '50',
+    })
+    expect(task.status).toBe('failed')
+    expect(task.error?.data).toMatchObject({
+      code: 'INSUFFICIENT_BALANCE',
+      details: { redemptionId: 'red_1', balance: '1', needed: '50' },
+      idempotencyKey: expect.any(String),
+    })
+  })
+
   it('refuses to cancel a submitted task', async () => {
     let answer = (_value: unknown) => {}
     api.mints.create.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
@@ -949,7 +989,7 @@ describe('a retry after the server dies mid-call', () => {
 
     const { isError, body } = await call(await connect(), 'tgbp_redeem', redeem)
     expect(isError).toBe(true)
-    expect(body.message).toMatch(/red_1 .*burn may have been sent/)
+    expect(body.message).toMatch(/red_1 .*may have been sent/)
     expect(chain.transfer).toHaveBeenCalledTimes(1)
     expect(api.redemptions.create).toHaveBeenCalledTimes(1)
   })
@@ -973,7 +1013,7 @@ describe('a retry after the server dies mid-call', () => {
     expect(chain.transfer).not.toHaveBeenCalled()
   })
 
-  it('sends a new key after the API refused the first request', async () => {
+  it('resends the same key after the API refused the first request', async () => {
     api.mints.create.mockRejectedValueOnce(
       new TgbpKitError('API_ERROR', 'POST /api/v1/mints returned 422', {
         details: { status: 422, requestId: 'req_1' },
@@ -987,7 +1027,9 @@ describe('a retry after the server dies mid-call', () => {
       (callArgs) =>
         (callArgs as unknown as [unknown, { idempotencyKey: string }])[1].idempotencyKey,
     )
-    expect(new Set(keys).size).toBe(2)
+    // A 4xx can follow an earlier attempt that created the record, so the key is kept.
+    expect(keys).toHaveLength(2)
+    expect(new Set(keys).size).toBe(1)
   })
 
   it('starts a new submission with a new key once the first one answered', async () => {

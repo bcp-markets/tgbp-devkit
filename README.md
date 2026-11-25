@@ -323,16 +323,22 @@ so a refusal comes back on the call and never as a task. A submitted task cannot
 clients get the result on the call itself.
 
 **Tasks end with the client.** `tgbp-mcp` runs over stdio and keeps tasks in memory, so its tasks
-end when the client exits or the server stops. A retry with the same inputs is still safe. Before
-it sends a mint, redemption or swap, the server saves the request's idempotency key to the
+end when the client exits or the server stops. A retry with the same inputs is still safe for a mint
+or a redemption. Before it sends one, the server saves the request's idempotency key to the
 submission journal, `<ledger file>.submissions.jsonl`, keyed by the request's inputs. A retry with
 the same inputs resends that key, and the API returns the first record instead of creating a second.
-Once the API creates the record, or refuses the request with a 4xx, the same inputs count as a new
-request with a new key. After any other failure the key stays saved, so a retry resends it. A saved key
-is reused for 24 hours, as long as the API keeps it. If the server stopped while a redemption's burn
-was being sent, every retry with those inputs is refused, because a second burn would destroy the tGBP
-twice. Check the burn address on chain; if the burn never arrived, cancel that redemption and redeem
-with a different reference.
+The key stays saved until the API returns the record and, for a task, the client reads it; after
+that, the same inputs count as a new request with a new key. After a failure the key stays saved, so
+a retry resends it. A saved key is reused for 24 hours, as long as the API keeps it. A swap sends its
+saved key too, but the swap API does not dedupe conversions by idempotency key: before you retry a
+swap, check the deposit balance and the recipient.
+
+**A burn record needs a human.** Once a redemption exists, the server records its burn before
+sending it. If the server stops during the burn, or the burn fails in a way that may have sent it,
+every redeem with the same inputs is refused, because a second burn would destroy the tGBP twice.
+The refusal names the redemption and its burn address. Check that burn on chain. If it arrived, the
+redemption pays out. If it never arrived, cancel the redemption, then redeem with a different
+`reference`.
 
 `tgbp_x402_pay` takes `url`, `maxPence`, `reason` and an optional `estimate`. It sends a GET to
 the URL and pays its x402 price in tGBP on Base Sepolia from the agent's wallet, through the

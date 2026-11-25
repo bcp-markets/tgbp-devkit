@@ -69,7 +69,15 @@ export type RedeemResult =
 export interface Prepared<T> {
   /** The key `submit` sends; undefined when there is no journal and no key was passed. */
   idempotencyKey: string | undefined
-  submit(): Promise<T>
+  /**
+   * Sends the action. It runs once: a second call throws, because the guard
+   * authorised one action. With `holdOpen`, a submission that succeeds stays
+   * open in the journal until `release`, so a retry before its result reaches
+   * the caller resends the same key.
+   */
+  submit(options?: { holdOpen?: boolean }): Promise<T>
+  /** Closes what `submit({ holdOpen: true })` left open. Call it once the result is delivered. */
+  release(): Promise<void>
 }
 
 export type SwapDirection = 'USDC_TO_TGBP' | 'TGBP_TO_USDC'
@@ -182,23 +190,37 @@ export function createAgentActions(options: AgentActionsOptions) {
       await submissions.close(tool, inputs, idempotencyKey, stage)
     } catch (error) {
       console.error(
-        `tgbp: could not close ${tool} ${idempotencyKey} in ${submissions.path}: ${String(error)}`,
+        `tgbp: could not close the ${stage} ${tool} with idempotency key ${idempotencyKey} ` +
+          `in ${submissions.path}; it stays open: ${String(error)}`,
       )
     }
   }
 
-  /** Sends a create; an API refusal closes the submission, since nothing was created. */
-  async function send<T>(
-    tool: SubmissionTool,
-    inputs: Record<string, unknown>,
+  /**
+   * Wraps `run` as a single-use `Prepared`. `run` passes each close that
+   * follows a success to `succeeded`, which holds it for `release` when asked.
+   */
+  function prepared<T>(
     idempotencyKey: string | undefined,
-    request: () => Promise<T>,
-  ): Promise<T> {
-    try {
-      return await request()
-    } catch (error) {
-      if (refusedByApi(error)) await closeSubmission(tool, inputs, idempotencyKey)
-      throw error
+    run: (succeeded: (close: () => Promise<void>) => Promise<void>) => Promise<T>,
+  ): Prepared<T> {
+    let used = false
+    let held: (() => Promise<void>) | undefined
+    return {
+      idempotencyKey,
+      async submit(submitOptions = {}) {
+        if (used) throw new Error('This action was already submitted; prepare it again')
+        used = true
+        return run(async (close) => {
+          if (submitOptions.holdOpen) held = close
+          else await close()
+        })
+      },
+      async release() {
+        const close = held
+        held = undefined
+        await close?.()
+      },
     }
   }
 
@@ -224,24 +246,19 @@ export function createAgentActions(options: AgentActionsOptions) {
       customerId: params.customerId || undefined,
     }
     const idempotencyKey = await openSubmission('mint', inputs, params.idempotencyKey)
-    return {
-      idempotencyKey,
-      async submit() {
-        const result = await send('mint', inputs, idempotencyKey, () =>
-          api.mints.create(
-            {
-              chain: token.chain,
-              destinationAddress: params.destinationAddress,
-              amount: { currency: 'GBP', value },
-              ...(params.customerId ? { customerId: params.customerId } : {}),
-            },
-            keyOptions(idempotencyKey),
-          ),
-        )
-        await closeSubmission('mint', inputs, idempotencyKey)
-        return result
-      },
-    }
+    return prepared(idempotencyKey, async (succeeded) => {
+      const result = await api.mints.create(
+        {
+          chain: token.chain,
+          destinationAddress: params.destinationAddress,
+          amount: { currency: 'GBP', value },
+          ...(params.customerId ? { customerId: params.customerId } : {}),
+        },
+        keyOptions(idempotencyKey),
+      )
+      await succeeded(() => closeSubmission('mint', inputs, idempotencyKey))
+      return result
+    })
   }
 
   async function prepareRedeem(params: RedeemParams): Promise<Prepared<RedeemResult>> {
@@ -271,55 +288,57 @@ export function createAgentActions(options: AgentActionsOptions) {
       amount: { currency: 'GBP' as const, value },
       ...(params.reference ? { reference: params.reference } : {}),
     }
-    return {
-      idempotencyKey,
-      async submit() {
-        const created = await send('redeem', inputs, idempotencyKey, () =>
-          idempotencyKey
-            ? api.redemptions.create(body, { idempotencyKey })
-            : api.redemptions.create(body),
-        )
-        // A second approver must act first; nothing is burned, and the spend stays counted.
-        if (created.status === 'pending_approval') {
-          await closeSubmission('redeem', inputs, idempotencyKey)
-          return { redemption: created, burned: false }
-        }
-        let redemption: Redemption = created.data
+    return prepared(idempotencyKey, async (succeeded): Promise<RedeemResult> => {
+      const created = idempotencyKey
+        ? await api.redemptions.create(body, { idempotencyKey })
+        : await api.redemptions.create(body)
+      // A second approver must act first; nothing is burned, and the spend stays counted.
+      if (created.status === 'pending_approval') {
+        await succeeded(() => closeSubmission('redeem', inputs, idempotencyKey))
+        return { redemption: created, burned: false }
+      }
+      let redemption: Redemption = created.data
+      try {
         // A replay returns the record as it was created; the burn needs its state now.
         if (created.status === 'replayed') {
           redemption = (await api.redemptions.get(redemption.redemptionId)).data
         }
+        assertRedemptionMatches(redemption, token, params.bankId, amount)
+      } catch (error) {
+        throw notBurned(error, redemption.redemptionId, idempotencyKey)
+      }
+      // Recorded before the burn is sent, so a retry after a crash never burns a second time.
+      if (submissions && idempotencyKey) {
         try {
-          assertRedemptionMatches(redemption, token, params.bankId, amount)
+          await submissions.burning(
+            inputs,
+            idempotencyKey,
+            redemption.redemptionId,
+            redemption.burnAddress,
+          )
         } catch (error) {
-          // The API's answer is final; a retry would only replay it.
-          await closeSubmission('redeem', inputs, idempotencyKey)
-          throw error
+          throw notBurned(error, redemption.redemptionId, idempotencyKey)
         }
-        // Recorded before the burn is sent, so a retry after a crash never burns a second time.
-        if (submissions && idempotencyKey) {
-          await submissions.burning(inputs, idempotencyKey, redemption.redemptionId)
+      }
+      let hash: Hex
+      try {
+        ;({ hash } = await transfer({
+          ...clients,
+          chain: token,
+          to: redemption.burnAddress,
+          amount: baseUnits,
+        }))
+      } catch (error) {
+        const failed = burnFailed(error, redemption.redemptionId, idempotencyKey)
+        // Only a burn known to have moved nothing may be retried; any other stays recorded as sent.
+        if (isTgbpKitError(error) && NOT_BURNED.has(error.code)) {
+          await closeSubmission('redeem', inputs, idempotencyKey, 'burning')
         }
-        let hash: Hex
-        try {
-          ;({ hash } = await transfer({
-            ...clients,
-            chain: token,
-            to: redemption.burnAddress,
-            amount: baseUnits,
-          }))
-        } catch (error) {
-          const failed = burnFailed(error, redemption.redemptionId, idempotencyKey)
-          // Only a burn known to have moved nothing may be retried; any other stays recorded as sent.
-          if (isTgbpKitError(error) && NOT_BURNED.has(error.code)) {
-            await closeSubmission('redeem', inputs, idempotencyKey, 'burning')
-          }
-          throw failed
-        }
-        await closeSubmission('redeem', inputs, idempotencyKey, 'burning')
-        return { redemption: created, burned: true, burnHash: hash }
-      },
-    }
+        throw failed
+      }
+      await succeeded(() => closeSubmission('redeem', inputs, idempotencyKey, 'burning'))
+      return { redemption: created, burned: true, burnHash: hash }
+    })
   }
 
   async function prepareSwap(
@@ -358,25 +377,20 @@ export function createAgentActions(options: AgentActionsOptions) {
     }
     const idempotencyKey = await openSubmission('swap', inputs, params.idempotencyKey)
     const amountField = params.direction === 'USDC_TO_TGBP' ? 'usdcAmount' : 'tgbpAmount'
-    return {
-      idempotencyKey,
-      async submit() {
-        const result = await send('swap', inputs, idempotencyKey, () =>
-          swap.createConversion(
-            {
-              chainId: swapChain,
-              direction: params.direction,
-              recipientAddress: params.recipient,
-              [amountField]: amount,
-              ...(params.minOut ? { minOut: params.minOut } : {}),
-            },
-            keyOptions(idempotencyKey),
-          ),
-        )
-        await closeSubmission('swap', inputs, idempotencyKey)
-        return result
-      },
-    }
+    return prepared(idempotencyKey, async (succeeded) => {
+      const result = await swap.createConversion(
+        {
+          chainId: swapChain,
+          direction: params.direction,
+          recipientAddress: params.recipient,
+          [amountField]: amount,
+          ...(params.minOut ? { minOut: params.minOut } : {}),
+        },
+        keyOptions(idempotencyKey),
+      )
+      await succeeded(() => closeSubmission('swap', inputs, idempotencyKey))
+      return result
+    })
   }
 }
 
@@ -419,18 +433,6 @@ function evmLower(address: string): string {
   return isAddress(address) ? address.toLowerCase() : address
 }
 
-/** Statuses that refuse a request without deciding it; a retry with the same key may still succeed. */
-const UNDECIDED_STATUSES = new Set([408, 409, 425, 429])
-
-/** The API answered with a 4xx that created nothing, so a retry needs no saved key. */
-function refusedByApi(error: unknown): boolean {
-  if (!isTgbpKitError(error) || error.code !== 'API_ERROR') return false
-  const status = error.details.status
-  return (
-    typeof status === 'number' && status >= 400 && status < 500 && !UNDECIDED_STATUSES.has(status)
-  )
-}
-
 /** Failures raised before the burn was broadcast, or by a mined revert: no tGBP moved. */
 const NOT_BURNED = new Set<string>([
   'INSUFFICIENT_BALANCE',
@@ -440,6 +442,31 @@ const NOT_BURNED = new Set<string>([
   'UNKNOWN_CHAIN',
   'TRANSFER_REVERTED',
 ])
+
+/**
+ * A failure after the redemption was created and before its burn was sent:
+ * nothing was burned. Keeps the original code and adds the redemption id.
+ */
+function notBurned(
+  error: unknown,
+  redemptionId: string,
+  idempotencyKey: string | undefined,
+): Error {
+  const kit = isTgbpKitError(error) ? error : undefined
+  const message = `Redemption ${redemptionId} was created but nothing was burned. ${reasonOf(error)}`
+  const details = { redemptionId, ...(idempotencyKey ? { idempotencyKey } : {}) }
+  return kit
+    ? new TgbpKitError(kit.code, message, { cause: error, details: { ...kit.details, ...details } })
+    : new Error(message, { cause: error })
+}
+
+function reasonOf(error: unknown): string {
+  return (
+    (isTgbpKitError(error) ? error.message : undefined) ??
+    ((error as { shortMessage?: unknown }).shortMessage as string | undefined) ??
+    (error instanceof Error ? error.message : String(error))
+  )
+}
 
 /**
  * Keep the original code, and add the redemption id the caller needs to
@@ -456,11 +483,7 @@ function burnFailed(
     kit && NOT_BURNED.has(kit.code)
       ? 'nothing was burned; fix the cause and burn again, or cancel it'
       : 'the burn may have been sent; check the transaction and the burn address before you burn again or cancel'
-  const reason =
-    kit?.message ??
-    ((error as { shortMessage?: unknown }).shortMessage as string | undefined) ??
-    (error instanceof Error ? error.message : String(error))
-  const message = `Redemption ${redemptionId} was created but its burn did not complete: ${advice}. ${reason}`
+  const message = `Redemption ${redemptionId} was created but its burn did not complete: ${advice}. ${reasonOf(error)}`
   return kit
     ? new TgbpKitError(kit.code, message, {
         cause: error,

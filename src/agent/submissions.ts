@@ -39,6 +39,8 @@ export interface SubmissionEntry {
   stage: SubmissionStage
   /** Redemptions only, from `burning` on: the redemption whose burn was sent. */
   redemptionId?: string
+  /** Redemptions only, on `burning`: where the burn was sent. */
+  burnAddress?: string
 }
 
 export interface Submission {
@@ -89,13 +91,15 @@ export class SubmissionJournal {
     inputs: Record<string, unknown>,
     idempotencyKey: string,
     redemptionId: string,
+    burnAddress: string,
   ): Promise<void> {
     const hash = hashInputs('redeem', inputs)
     await withFileLock(this.path, 'submission journal', this.lockWaitMs, async () => {
       const last = this.latest(await this.entries(), hash)
       if (last?.idempotencyKey !== idempotencyKey || last.stage !== 'submitted') {
         throw new Error(
-          `Another attempt is burning redemption ${redemptionId}; nothing was burned here`,
+          `The submission journal no longer holds idempotency key ${idempotencyKey} open for this ` +
+            'attempt, so another attempt may be burning it. Check the redemption before you redeem again',
         )
       }
       await this.append({
@@ -104,6 +108,7 @@ export class SubmissionJournal {
         idempotencyKey,
         stage: 'burning',
         redemptionId,
+        burnAddress,
       })
     })
   }
@@ -178,11 +183,13 @@ export class SubmissionJournal {
   }
 }
 
+/** Told to the agent, so it names only a step for a human: any other step could burn twice. */
 function burnMayHaveBeenSent(entry: SubmissionEntry): Error {
+  const to = entry.burnAddress ? ` to ${entry.burnAddress}` : ''
   return new Error(
-    `Redemption ${entry.redemptionId} for these inputs was created and its burn may have been sent ` +
-      `(idempotency key ${entry.idempotencyKey}); nothing was sent now. Check the burn address on chain. ` +
-      'If the burn never arrived, cancel that redemption and redeem with a different reference.',
+    `Redemption ${entry.redemptionId} for these inputs was created and its burn${to} may have been ` +
+      `sent (idempotency key ${entry.idempotencyKey}); nothing was sent now. Stop and ask a human to ` +
+      'check that burn on chain before anything is redeemed with these inputs.',
   )
 }
 
@@ -214,7 +221,8 @@ function parseEntry(line: string, lineNumber: number, path: string): SubmissionE
     typeof e.idempotencyKey !== 'string' ||
     !TOOLS.includes(e.tool as string) ||
     !STAGES.includes(e.stage as string) ||
-    (e.redemptionId !== undefined && typeof e.redemptionId !== 'string')
+    (e.redemptionId !== undefined && typeof e.redemptionId !== 'string') ||
+    (e.burnAddress !== undefined && typeof e.burnAddress !== 'string')
   ) {
     throw new Error(`${path}:${lineNumber} is not a submission journal entry`)
   }

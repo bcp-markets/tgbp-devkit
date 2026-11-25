@@ -55,11 +55,20 @@ export interface TaskError {
  */
 export class TaskStore {
   private readonly tasks = new Map<string, TgbpTask>()
+  /** Runs once, the first time a completed task's result is read. */
+  private readonly onDelivered = new Map<string, () => Promise<void>>()
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
-  /** Starts `run` and returns its task, already readable through `get`. */
-  start(run: () => Promise<CallToolResult>, fail: (error: unknown) => TaskError): TgbpTask {
+  /**
+   * Starts `run` and returns its task, already readable through `get`.
+   * `delivered` runs the first time `tasks/get` returns the task completed.
+   */
+  start(
+    run: () => Promise<CallToolResult>,
+    fail: (error: unknown) => TaskError,
+    delivered?: () => Promise<void>,
+  ): TgbpTask {
     this.prune()
     const at = this.now().toISOString()
     const task: TgbpTask = {
@@ -71,6 +80,7 @@ export class TaskStore {
       pollIntervalMs: POLL_INTERVAL_MS,
     }
     this.tasks.set(task.taskId, task)
+    if (delivered) this.onDelivered.set(task.taskId, delivered)
     // Never rejects: a task always finishes, and a stray rejection would stop a stdio server.
     void (async () => {
       let update: Partial<TgbpTask>
@@ -96,6 +106,17 @@ export class TaskStore {
     return task && { ...task }
   }
 
+  /**
+   * Runs the task's `delivered` callback the first time it is read completed.
+   * Its own failures are reported where they happen, so this never throws.
+   */
+  async markRead(taskId: string): Promise<void> {
+    if (this.tasks.get(taskId)?.status !== 'completed') return
+    const delivered = this.onDelivered.get(taskId)
+    this.onDelivered.delete(taskId)
+    await delivered?.().catch(() => {})
+  }
+
   private finish(task: TgbpTask, update: Partial<TgbpTask>): void {
     Object.assign(task, update, { lastUpdatedAt: this.now().toISOString() })
   }
@@ -106,6 +127,7 @@ export class TaskStore {
     for (const [id, task] of this.tasks) {
       if (task.status !== 'working' && now - Date.parse(task.lastUpdatedAt) > task.ttlMs) {
         this.tasks.delete(id)
+        this.onDelivered.delete(id)
       }
     }
   }
@@ -142,11 +164,12 @@ export function registerTaskHandlers(server: McpServer, store: TaskStore): void 
     if (!task) throw new ProtocolError(ProtocolErrorCode.InvalidParams, `No task ${taskId}`)
     return task
   }
-  server.server.setRequestHandler(
-    'tasks/get',
-    { params: TaskIdParams },
-    async ({ taskId }) => find(taskId) as never,
-  )
+  server.server.setRequestHandler('tasks/get', { params: TaskIdParams }, async ({ taskId }) => {
+    const task = find(taskId)
+    // Before the answer goes out, so a retry after the client reads it starts a new submission.
+    await store.markRead(taskId)
+    return task as never
+  })
   server.server.setRequestHandler('tasks/cancel', { params: TaskIdParams }, async ({ taskId }) => {
     find(taskId)
     // The request may already be with the API, and the journal keeps its key open for a retry.

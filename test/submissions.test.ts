@@ -55,19 +55,19 @@ describe('submission journal', () => {
 
   it('lets only one attempt burn a redemption, and refuses a retry after it', async () => {
     const { idempotencyKey } = await journal().open('redeem', inputs)
-    await journal().burning(inputs, idempotencyKey, 'red_1')
-    await expect(journal().burning(inputs, idempotencyKey, 'red_1')).rejects.toThrow(
-      /nothing was burned here/,
+    await journal().burning(inputs, idempotencyKey, 'red_1', '0xdead')
+    await expect(journal().burning(inputs, idempotencyKey, 'red_1', '0xdead')).rejects.toThrow(
+      /no longer holds/,
     )
     await expect(journal().open('redeem', inputs)).rejects.toThrow(/red_1 .*may have been sent/)
   })
 
   it('keeps refusing a redemption whose burn may have been sent, at any age', async () => {
     const { idempotencyKey } = await journal().open('redeem', inputs)
-    await journal().burning(inputs, idempotencyKey, 'red_1')
+    await journal().burning(inputs, idempotencyKey, 'red_1', '0xdead')
     now = new Date(now.getTime() + 30 * SUBMISSION_KEY_LIFETIME_MS)
     await expect(journal().open('redeem', inputs)).rejects.toThrow(/red_1/)
-    await expect(journal().assertNotBurning(inputs)).rejects.toThrow(/different reference/)
+    await expect(journal().assertNotBurning(inputs)).rejects.toThrow(/to 0xdead .*ask a human/)
   })
 
   it('ignores a close from a slower attempt once a newer submission is open', async () => {
