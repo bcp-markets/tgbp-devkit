@@ -91,6 +91,7 @@ class Generator:
         self.paths: Schema = spec["paths"]
         self.blocks: list[str] = []
         self.names: set[str] = set()
+        self.models: set[str] = set()
         self.imports: set[str] = set()
 
     def resolve(self, node: Schema) -> Schema:
@@ -167,7 +168,7 @@ class Generator:
         for member in schema["allOf"]:
             if "$ref" in member:
                 base = str(member["$ref"]).split("/")[-1]
-                if base not in self.names:
+                if base not in self.models:
                     raise ValueError(f"{name}: allOf member {base} is not a model defined before it")
                 bases.append(base)
             elif member.get("type") == "object" and set(member) <= {"type", "properties", "required"}:
@@ -180,6 +181,7 @@ class Generator:
     def model(self, name: str, schema: Schema, *, query: bool = False, bases: list[str] | None = None) -> str:
         """Emits a model class. A query model only ever serialises, so it aliases on output only."""
         self.claim(name)
+        self.models.add(name)
         required = set(schema.get("required", [])) - OPTIONAL.get(name, set())
         lines = [f"class {name}({', '.join(bases or ['Model'])}):"]
         for field, prop in sorted(schema["properties"].items()):

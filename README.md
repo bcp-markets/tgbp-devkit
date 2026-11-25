@@ -314,8 +314,9 @@ is `pending` and matches the chain, amount and bank account asked for.
 `tgbp_swap` registers a swap intent, a firm quote, then converts the deposit that fills it. Never
 fund the swap deposit address before the intent exists: the swap API neither converts nor returns
 a deposit that no intent expects. Until the deposit confirms, `tgbp_swap` fails with the exact
-amount to send, the address to send it from (the recipient) and the deadline. Send it, then call
-`tgbp_swap` again with the same inputs to convert that intent. `minOut` is checked against the
+amount to send, the address to send it from (the recipient), the deposit address and the deadline.
+Send it once, then call `tgbp_swap` again with the same inputs to convert that intent. A second
+deposit is never converted, so a retry before the first confirms says to wait. `minOut` is checked against the
 intent's quote, and an intent that pays less is cancelled. `tgbp_mint` and `tgbp_swap` take an
 optional `idempotencyKey`: after an ambiguous failure, retry with the key from the error to get the
 first record back. For a swap the key is the intent's id, so it is 6 to 18 characters.
@@ -338,9 +339,10 @@ The key stays saved until the API returns the record and, for a task, the client
 that, the same inputs count as a new request with a new key. After a failure the key stays saved, so
 a retry resends it. A saved key is reused for 24 hours, as long as the API keeps it. A swap's saved
 key is its swap intent's id: a retry finds the same intent, and the swap API converts an intent at
-most once. An intent that expired or was cancelled frees the inputs, so the next swap with them
-registers a new intent. One that failed or was withdrawn may hold a deposit, so a swap with the same
-inputs is refused for 24 hours; a human checks the intent and its deposit.
+most once. An intent that expired or was withdrawn (a cancel withdraws it) frees the inputs, so the
+next swap with them registers a new intent. One that failed may hold a deposit, so a swap with the
+same inputs is refused for 24 hours; a human checks the intent and its deposit. A swap whose intent
+had already converted returns that conversion, marked `replayed`.
 
 **A burn record needs a human.** Once a redemption exists, the server records its burn before
 sending it. If the server stops during the burn, or the burn fails in a way that may have sent it,

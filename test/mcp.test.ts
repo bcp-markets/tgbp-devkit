@@ -38,6 +38,7 @@ vi.mock('../src/evm/index.js', () => chain)
 
 const AGENT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
 const BURN = '0x000000000000000000000000000000000000dEaD'
+const DEPOSIT = '0x2222222222222222222222222222222222222222'
 
 const POLICY: SpendPolicy = {
   version: 1,
@@ -101,9 +102,11 @@ const swap = {
     return { data: found, idempotencyKey: body.id }
   }),
   cancelSwapIntent: vi.fn(async (id: string) => {
-    intents.set(id, { ...intents.get(id), status: 'cancelled' })
+    // The swap API withdraws an intent it cancels.
+    intents.set(id, { ...intents.get(id), status: 'withdrawn' })
     return { data: intents.get(id) }
   }),
+  getDepositSession: vi.fn(async () => ({ data: { depositAddress: DEPOSIT } })),
   createConversion: vi.fn(async (body: { intentId: string }, _opts?: unknown): Promise<unknown> => {
     converted.add(body.intentId)
     return { data: { id: 'conv_1', status: 'sweep_pending' }, idempotencyKey: 'k' }
@@ -538,7 +541,7 @@ describe('swap intents', () => {
     const first = await call(client, 'tgbp_swap', args)
     expect(first.isError).toBe(true)
     expect(first.body.message).toContain(
-      `Send exactly 10 tGBP from ${AGENT} to your swap deposit address before 2999-01-01T00:00:00Z`,
+      `Send exactly 10 tGBP from ${AGENT} to the swap deposit address ${DEPOSIT}, mined before 2999-01-01T00:00:00Z`,
     )
     const [id] = intentIds()
     expect(first.body.message).toContain(`idempotencyKey ${id}`)
@@ -550,6 +553,19 @@ describe('swap intents', () => {
     expect((await call(client, 'tgbp_swap', args)).isError).toBe(false)
     expect(intentIds()).toEqual([id, id])
     expect([...converted]).toEqual([id])
+  })
+
+  it('tells a resumed swap to wait for a deposit already sent, never to send a second', async () => {
+    const noDeposit = () =>
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      })
+    swap.createConversion.mockRejectedValueOnce(noDeposit()).mockRejectedValueOnce(noDeposit())
+    const client = await connect()
+    await call(client, 'tgbp_swap', args)
+    const { body } = await call(client, 'tgbp_swap', args)
+    expect(body.message).toContain('If its deposit was already sent, send nothing more')
+    expect(new Set(intentIds()).size).toBe(1)
   })
 
   it('cancels an intent whose firm quote pays less than minOut, and converts nothing', async () => {
@@ -580,6 +596,15 @@ describe('swap intents', () => {
     await call(client, 'tgbp_swap', { ...args, minOut: '13' })
     expect(new Set(intentIds()).size).toBe(1)
     expect(swap.createConversion).not.toHaveBeenCalled()
+  })
+
+  it('keeps a refused intent open when the swap API does not confirm the cancel', async () => {
+    swap.cancelSwapIntent.mockResolvedValueOnce({ data: { status: 'converted' } } as never)
+    const client = await connect()
+    const { body } = await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(body.message).toContain('Cancelling it failed, so do not fund it')
+    await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(new Set(intentIds()).size).toBe(1)
   })
 
   it('starts a new intent once the saved one expired', async () => {
@@ -644,9 +669,10 @@ describe('swap intents', () => {
       data: intent(body, { status: 'converted' }),
       idempotencyKey: body.id,
     }))
-    const { isError } = await call(await connect(), 'tgbp_swap', { ...args, minOut: '99' })
+    const { isError, body } = await call(await connect(), 'tgbp_swap', { ...args, minOut: '99' })
     // Its quote was accepted when it converted; the repeat returns that conversion.
     expect(isError).toBe(false)
+    expect(body.replayed).toBe(true)
     expect(swap.cancelSwapIntent).not.toHaveBeenCalled()
     expect(converted.size).toBe(1)
   })

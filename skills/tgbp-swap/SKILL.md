@@ -21,11 +21,13 @@ converts nor returns a deposit that no intent expects.
    - `idempotencyKey` (optional): only to retry a swap that failed with an unclear result, using
      the `intentId` from that error. Never retry with a new one.
 3. Until a deposit fills the intent, the call fails with the exact amount to send, the address to
-   send it from and a deadline. Send exactly that amount from `recipient` to the account's swap
-   deposit address before the deadline. Sending tGBP there is a transfer, so the deposit address
-   must be in `destinations`.
+   send it from, the swap deposit address and a deadline. Send exactly that amount, once, from
+   `recipient` to that address before the deadline. Sending tGBP there is a transfer, so the
+   deposit address must be in `destinations`. If this agent's wallet is not `recipient`, it cannot
+   fund the swap: tell the user who must send it.
 4. Once the deposit confirms, call `tgbp_swap` again with the same inputs. It finds the same
-   intent and converts it. The swap API also converts a funded intent on its own.
+   intent and converts it. The swap API also converts a funded intent on its own. If the call says
+   the deposit has not confirmed yet, wait and call again: never send a second deposit.
 5. Report the conversion to the user.
 
 The caps are in pounds. A USDC amount counts as the same number of pounds, so 100 USDC uses
@@ -38,9 +40,9 @@ the user the rule and stop. Never split a swap into smaller ones to get under a 
 send to a different recipient to get round a refusal. A refused second call does not strand a
 deposit: the swap API converts a funded intent on its own.
 
-An intent that expired or was cancelled converts nothing. The next call with the same inputs
-registers a new one. An intent that failed or was withdrawn may already hold a deposit, so every
-call with the same inputs is refused: send nothing more, and ask a human to check it.
+An intent that expired or was withdrawn converts nothing. The next call with the same inputs
+registers a new one. An intent that failed may already hold a deposit, so every call with the same
+inputs is refused: send nothing more, and ask a human to check it.
 
 ## Mainnet
 
