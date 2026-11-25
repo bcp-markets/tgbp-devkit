@@ -66,12 +66,24 @@ const X402_TIMEOUT_MS = 45_000
  */
 const REQUIRES_USER_INTERACTION = { 'anthropic/requiresUserInteraction': true }
 
+const CANNOT_ASK_ON_THIS_CONNECTION =
+  'This server asks a human only on a 2025-era MCP connection it holds open, such as stdio; ' +
+  'this connection cannot carry the question'
+
+/**
+ * Builds a server for one connection. Each server pays x402 URLs one at a time,
+ * but two servers built from the same options do not queue behind each other.
+ */
 export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const server = new McpServer({ name: 'tgbp', version: KIT_VERSION })
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
 
   const approver: Approver = async (request, signal) => {
-    if (!server.server.getClientCapabilities()?.elicitation) return false
+    const capabilities = server.server.getClientCapabilities()
+    // A 2025-era connection that the server holds open (stdio) carries the client's
+    // capabilities; a 2026-07-28 one does not, and cannot carry the question.
+    if (capabilities === undefined) throw new Error(CANNOT_ASK_ON_THIS_CONNECTION)
+    if (!capabilities.elicitation) return false
     const [message, title] =
       request.action === 'redeem'
         ? [
@@ -107,10 +119,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           error instanceof SdkError &&
           error.code === SdkErrorCode.MethodNotSupportedByProtocolVersion
         ) {
-          throw new Error(
-            'This server asks a human only on a 2025-era MCP connection, and this client connected on 2026-07-28',
-            { cause: error },
-          )
+          throw new Error(CANNOT_ASK_ON_THIS_CONNECTION, { cause: error })
         }
         throw error
       })

@@ -12,6 +12,7 @@ import {
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client'
 import { createMcpHandler } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import express from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -141,6 +142,26 @@ async function connectModern(options: { elicit?: boolean } = {}) {
       fetch: (url, init) => handler.fetch(new Request(url, init)),
     }),
   )
+  clients.push(client)
+  return client
+}
+
+/** The tgbp-mcp entry point: serveStdio, here over an in-memory pipe in place of the process's stdio. */
+async function connectStdio(options: { modern?: boolean } = {}) {
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+  serveStdio(() => createServer(), { transport: serverSide })
+  const client = new Client(
+    { name: 'test', version: '0' },
+    {
+      capabilities: { elicitation: {} },
+      ...(options.modern ? { versionNegotiation: { mode: { pin: '2026-07-28' as const } } } : {}),
+    },
+  )
+  client.setRequestHandler('elicitation/create', async () => ({
+    action: 'accept',
+    content: { approve: true },
+  }))
+  await client.connect(clientSide)
   clients.push(client)
   return client
 }
@@ -291,7 +312,7 @@ describe('redemption over the approval threshold', () => {
       const { body } = await call(await connectModern({ elicit }), 'tgbp_redeem', redeem)
       expect(body.code).toBe('SPEND_POLICY_DENIED')
       expect(body.details.rule).toBe('redemptionApprovalAbove')
-      if (elicit) expect(body.details.approverError).toMatch(/only on a 2025-era MCP connection/)
+      if (elicit) expect(body.details.approverError).toMatch(/cannot carry the question/)
       expectNothingSent()
     },
   )
@@ -325,6 +346,23 @@ describe('redemption over the approval threshold', () => {
     expect(chain.transfer).toHaveBeenCalledWith(
       expect.objectContaining({ to: BURN, amount: 80_000_000_000_000_000_000n }),
     )
+  })
+
+  it('asks the human over stdio on a 2025-era connection', async () => {
+    const client = await connectStdio()
+    expect(client.getProtocolEra()).toBe('legacy')
+    const { isError, body } = await call(client, 'tgbp_redeem', redeem)
+    expect(isError).toBe(false)
+    expect(body.burnHash).toBe('0xburn')
+  })
+
+  it('is refused over stdio on a 2026-07-28 connection, and says why', async () => {
+    const client = await connectStdio({ modern: true })
+    expect(client.getProtocolEra()).toBe('modern')
+    const { body } = await call(client, 'tgbp_redeem', redeem)
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details.approverError).toMatch(/cannot carry the question/)
+    expectNothingSent()
   })
 })
 
