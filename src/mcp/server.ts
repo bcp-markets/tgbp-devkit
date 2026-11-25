@@ -2,12 +2,23 @@
  * An MCP server that gives an agent tGBP tools, every one that moves value
  * behind the spend policy. A redemption above the approval threshold, and the
  * first x402 payment to a service, ask the human through the MCP client
- * (elicitation). A client that cannot ask, a "no", and no answer before the
- * timeout all refuse it.
+ * (elicitation). A 2025-era connection asks in the middle of the call; on a
+ * 2026-07-28 connection the call returns `input_required` and goes ahead only
+ * when the client calls again with the human's answer. A client that cannot
+ * ask, a "no", and no answer before the timeout all refuse it.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+
 import {
+  acceptedContent,
   type CallToolResult,
+  CLIENT_CAPABILITIES_META_KEY,
+  createRequestStateCodec,
+  type InputRequiredResult,
+  inputRequired,
   McpServer,
+  PROTOCOL_VERSION_META_KEY,
   ProtocolErrorCode,
   SdkError,
   SdkErrorCode,
@@ -17,6 +28,7 @@ import { z } from 'zod'
 
 import { type AgentActionsOptions, createAgentActions, type Prepared } from '../agent/actions.js'
 import {
+  type ApprovalRequest,
   type Approver,
   createSpendGuard,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -90,6 +102,37 @@ const CANNOT_ASK_ON_THIS_CONNECTION =
   'This server asks a human only on a 2025-era MCP connection it holds open, such as stdio; ' +
   'this connection cannot carry the question'
 
+/** The `inputRequests` key a 2026-07-28 approval question goes under. */
+const APPROVAL_INPUT = 'approval'
+
+/**
+ * Signs the `requestState` an approval question carries, so a client cannot
+ * forge one. One key per process: every server built here shares it, and an
+ * answer that reaches another process is refused, never trusted.
+ */
+const APPROVAL_STATE_KEY = randomBytes(32)
+
+/**
+ * The approval questions this process has had an answer to, by nonce, with
+ * when each would expire anyway. An answer counts once: a client that sends
+ * it again is asked again.
+ */
+const answeredApprovals = new Map<string, number>()
+
+/** What an approval question's `requestState` carries. */
+interface ApprovalState {
+  /** Names the exact action asked about, so the answer approves that action alone. */
+  digest: string
+  nonce: string
+}
+
+/** One tool call that may ask for approval. */
+interface ApprovalCall {
+  ctx: ServerContext
+  /** Set when a 2026-07-28 call needs the human: the call answers `input_required` instead. */
+  question?: { request: ApprovalRequest; digest: string }
+}
+
 /**
  * Builds a server for one connection. Each server pays x402 URLs one at a time,
  * but two servers built from the same options do not queue behind each other.
@@ -102,40 +145,92 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const taskStore = options.taskStore ?? new TaskStore(options.now)
   registerTaskHandlers(server, taskStore)
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
+  // An answer later than the 2025-era wait would be is refused, as that wait refuses it.
+  const approvalState = createRequestStateCodec<ApprovalState>({
+    key: APPROVAL_STATE_KEY,
+    ttlSeconds: Math.max(1, Math.ceil(approvalTimeoutMs / 1000)),
+    bind: (ctx) => `${ctx.mcpReq.method}\0${ctx.http?.authInfo?.clientId ?? ''}`,
+  })
+  // The guard asks its approver in the middle of an action; this says which call it is.
+  const approvalCalls = new AsyncLocalStorage<ApprovalCall>()
+
+  /**
+   * On a 2026-07-28 call, approves from the answer the client sent with this
+   * call. With no answer to this exact action yet, it notes the question and
+   * refuses, so nothing is signed, sent or recorded; `asking` then returns
+   * the question as `input_required`.
+   */
+  async function approveFromInput(call: ApprovalCall, request: ApprovalRequest): Promise<boolean> {
+    const { ctx } = call
+    const digest = createHash('sha256').update(JSON.stringify(request)).digest('hex')
+    const sealed = ctx.mcpReq.requestState<unknown>()
+    if (typeof sealed === 'string') {
+      let state: ApprovalState
+      try {
+        state = await approvalState.verify(sealed, ctx)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : ''
+        throw new Error(
+          reason === 'expired'
+            ? 'no answer before the timeout'
+            : 'the answer is not to a question this server asked',
+        )
+      }
+      // An answer to another action, or one already used, approves nothing: ask again.
+      if (state.digest === digest && claimAnswer(state.nonce, approvalTimeoutMs)) {
+        const responses = ctx.mcpReq.inputResponses
+        if (responses?.[APPROVAL_INPUT] === undefined) {
+          throw new Error('the client called again without the answer')
+        }
+        // Undefined on a decline or a cancel.
+        const content = acceptedContent(responses, APPROVAL_INPUT)
+        return content?.approve === true
+      }
+    }
+    const capabilities = envelope(ctx)[CLIENT_CAPABILITIES_META_KEY] as
+      | { elicitation?: unknown }
+      | undefined
+    if (!capabilities?.elicitation) return false
+    call.question = { request, digest }
+    return false
+  }
+
+  /**
+   * Runs one tool call. A 2026-07-28 call that needs the human answers
+   * `input_required`; the client asks, then calls again with the answer.
+   */
+  async function asking(
+    ctx: ServerContext,
+    fn: () => Promise<CallToolResult>,
+  ): Promise<CallToolResult | InputRequiredResult> {
+    const call: ApprovalCall = { ctx }
+    const result = await approvalCalls.run(call, fn)
+    if (!call.question) return result
+    const { request, digest } = call.question
+    const { message, schema } = approvalQuestion(request)
+    return inputRequired({
+      inputRequests: {
+        [APPROVAL_INPUT]: inputRequired.elicit({ message, requestedSchema: schema }),
+      },
+      requestState: await approvalState.mint({ digest, nonce: randomUUID() }, ctx),
+    })
+  }
 
   const approver: Approver = async (request, signal) => {
+    const call = approvalCalls.getStore()
+    // A 2026-07-28 request names its protocol version in its envelope.
+    if (call && envelope(call.ctx)[PROTOCOL_VERSION_META_KEY] !== undefined) {
+      return approveFromInput(call, request)
+    }
     const capabilities = server.server.getClientCapabilities()
     // A 2025-era connection that the server holds open (stdio) carries the client's
     // capabilities; a 2026-07-28 one does not, and cannot carry the question.
     if (capabilities === undefined) throw new Error(CANNOT_ASK_ON_THIS_CONNECTION)
     if (!capabilities.elicitation) return false
-    const [message, title] =
-      request.action === 'redeem'
-        ? [
-            `An agent asks to redeem ${request.amount} tGBP on ${request.chain} to bank ` +
-              `${request.destination}. Your spend policy needs a human to approve any redemption ` +
-              `over ${request.threshold}. Approve it?`,
-            'Approve this redemption',
-          ]
-        : [
-            // The URL and reason are the agent's own words, quoted so the human reads them as claims.
-            `An agent asks to pay ${request.amount} tGBP on ${request.chain} for ${JSON.stringify(request.url)}, ` +
-              `its first payment to the x402 service "${request.service}" (budget ` +
-              `"${request.category}"). The agent says: ${JSON.stringify(request.reason)}. Your ` +
-              'spend policy needs a human to approve the first payment to each service. Approve it?',
-            'Approve payments to this service',
-          ]
+    const { message, schema } = approvalQuestion(request)
     const result = await server.server
       .elicitInput(
-        {
-          mode: 'form',
-          message,
-          requestedSchema: {
-            type: 'object',
-            properties: { approve: { type: 'boolean', title } },
-            required: ['approve'],
-          },
-        },
+        { mode: 'form', message, requestedSchema: schema },
         { signal, timeout: approvalTimeoutMs },
       )
       .catch((error: unknown) => {
@@ -269,7 +364,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       annotations: { destructiveHint: true, openWorldHint: true },
       _meta: REQUIRES_USER_INTERACTION,
     },
-    (args, ctx) => submit(ctx, () => actions.prepare.redeem(args)),
+    (args, ctx) => asking(ctx, () => submit(ctx, () => actions.prepare.redeem(args))),
   )
 
   server.registerTool(
@@ -348,60 +443,109 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       _meta: REQUIRES_USER_INTERACTION,
     },
     ({ url, maxPence, estimate, reason }, ctx) =>
-      run(async () => {
-        // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
-        const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
-        if (estimate) {
-          const x402 = await loadX402()
-          const quote = await x402.quoteTgbpPayment(url, { signal })
-          if (quote.free) return { estimate: true, ...quote }
-          const token = x402.TGBP_BASE_SEPOLIA
-          return {
-            estimate: true,
-            free: false,
-            url: quote.url,
-            amount: formatAmount(quote.amount, token.decimals),
-            payTo: quote.payTo,
-            network: quote.network,
-            maxPence,
-            withinMax: quote.amount <= x402.penceToBaseUnits(maxPence, token),
+      asking(ctx, () =>
+        run(async () => {
+          // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
+          const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
+          if (estimate) {
+            const x402 = await loadX402()
+            const quote = await x402.quoteTgbpPayment(url, { signal })
+            if (quote.free) return { estimate: true, ...quote }
+            const token = x402.TGBP_BASE_SEPOLIA
+            return {
+              estimate: true,
+              free: false,
+              url: quote.url,
+              amount: formatAmount(quote.amount, token.decimals),
+              payTo: quote.payTo,
+              network: quote.network,
+              maxPence,
+              withinMax: quote.amount <= x402.penceToBaseUnits(maxPence, token),
+            }
           }
-        }
-        if (reason === undefined || reason.trim() === '') {
-          throw new RangeError('Pass a reason: the spend ledger records why each payment was made')
-        }
-        const { decimals } = (await loadX402()).TGBP_BASE_SEPOLIA
-        const pay = await x402PaymentFetch()
-        const paid = await pay(url, { signal }, { reason, maxPence })
-        const status = paid.response.status
-        if (!paid.settlement || paid.amount === undefined) {
-          // Only paid content comes back, so the tool is no proxy for reading other URLs.
-          await paid.response.body?.cancel()
-          return {
-            url,
-            status,
-            paid: null,
-            message: 'The URL did not ask for payment; nothing was paid.',
+          if (reason === undefined || reason.trim() === '') {
+            throw new RangeError(
+              'Pass a reason: the spend ledger records why each payment was made',
+            )
           }
-        }
-        const receipt = {
-          amount: formatAmount(paid.amount, decimals),
-          payTo: paid.payTo,
-          transaction: paid.settlement.transaction,
-          network: paid.settlement.network,
-        }
-        // The payment has settled: a failed read must still report it, or the agent would pay again.
-        try {
-          const { text, truncated } = await readCapped(paid.response, MAX_X402_BODY_BYTES)
-          const contentType = paid.response.headers.get('content-type')
-          return { url, status, contentType, body: text, truncated, paid: receipt }
-        } catch (error) {
-          return { url, status, bodyError: plainMessage(error), paid: receipt }
-        }
-      }),
+          const { decimals } = (await loadX402()).TGBP_BASE_SEPOLIA
+          const pay = await x402PaymentFetch()
+          const paid = await pay(url, { signal }, { reason, maxPence })
+          const status = paid.response.status
+          if (!paid.settlement || paid.amount === undefined) {
+            // Only paid content comes back, so the tool is no proxy for reading other URLs.
+            await paid.response.body?.cancel()
+            return {
+              url,
+              status,
+              paid: null,
+              message: 'The URL did not ask for payment; nothing was paid.',
+            }
+          }
+          const receipt = {
+            amount: formatAmount(paid.amount, decimals),
+            payTo: paid.payTo,
+            transaction: paid.settlement.transaction,
+            network: paid.settlement.network,
+          }
+          // The payment has settled: a failed read must still report it, or the agent would pay again.
+          try {
+            const { text, truncated } = await readCapped(paid.response, MAX_X402_BODY_BYTES)
+            const contentType = paid.response.headers.get('content-type')
+            return { url, status, contentType, body: text, truncated, paid: receipt }
+          } catch (error) {
+            return { url, status, bodyError: plainMessage(error), paid: receipt }
+          }
+        }),
+      ),
   )
 
   return server
+}
+
+/** What the human is asked, on either protocol. */
+function approvalQuestion(request: ApprovalRequest) {
+  const [message, title] =
+    request.action === 'redeem'
+      ? [
+          `An agent asks to redeem ${request.amount} tGBP on ${request.chain} to bank ` +
+            `${request.destination}. Your spend policy needs a human to approve any redemption ` +
+            `over ${request.threshold}. Approve it?`,
+          'Approve this redemption',
+        ]
+      : [
+          // The URL and reason are the agent's own words, quoted so the human reads them as claims.
+          `An agent asks to pay ${request.amount} tGBP on ${request.chain} for ${JSON.stringify(request.url)}, ` +
+            `its first payment to the x402 service "${request.service}" (budget ` +
+            `"${request.category}"). The agent says: ${JSON.stringify(request.reason)}. Your ` +
+            'spend policy needs a human to approve the first payment to each service. Approve it?',
+          'Approve payments to this service',
+        ]
+  return {
+    message,
+    schema: {
+      type: 'object' as const,
+      properties: { approve: { type: 'boolean' as const, title } },
+      required: ['approve'],
+    },
+  }
+}
+
+/** The request's 2026-07-28 `_meta` envelope; empty on a 2025-era request. */
+function envelope(ctx: ServerContext): Record<string, unknown> {
+  return (ctx.mcpReq.envelope ?? {}) as Record<string, unknown>
+}
+
+/** Records the answer to one approval question; false if it was already used. */
+function claimAnswer(nonce: string, ttlMs: number): boolean {
+  const now = Date.now()
+  for (const [used, expires] of answeredApprovals) {
+    if (expires <= now) answeredApprovals.delete(used)
+  }
+  if (answeredApprovals.has(nonce)) return false
+  // Kept past the requestState's own expiry, so the codec refuses it first.
+  answeredApprovals.set(nonce, now + ttlMs + 60_000)
+  return true
 }
 
 /** The x402 packages are optional peers, so the client loads on first use. */
