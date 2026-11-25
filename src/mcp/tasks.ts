@@ -127,7 +127,9 @@ export class TaskStore {
     for (const [id, task] of this.tasks) {
       if (task.status !== 'working' && now - Date.parse(task.lastUpdatedAt) > task.ttlMs) {
         this.tasks.delete(id)
-        this.onDelivered.delete(id)
+        if (this.onDelivered.delete(id)) {
+          console.error(`tgbp: task ${id} expired unread; its submission stays open in the journal`)
+        }
       }
     }
   }

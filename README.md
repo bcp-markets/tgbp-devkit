@@ -336,9 +336,11 @@ swap, check the deposit balance and the recipient.
 **A burn record needs a human.** Once a redemption exists, the server records its burn before
 sending it. If the server stops during the burn, or the burn fails in a way that may have sent it,
 every redeem with the same inputs is refused, because a second burn would destroy the tGBP twice.
-The refusal names the redemption and its burn address. Check that burn on chain. If it arrived, the
-redemption pays out. If it never arrived, cancel the redemption, then redeem with a different
-`reference`.
+The same holds when a task's burn confirmed but the client never read the result; the refusal then
+names the transaction. The refusal names the redemption and its burn address. Check that burn on
+chain. If it arrived, the redemption pays out. If it never arrived, cancel the redemption, then
+redeem with a different `reference`. A burn that failed before it was sent, such as for too little
+balance, frees the inputs instead: a retry creates a new redemption, so cancel the first one.
 
 `tgbp_x402_pay` takes `url`, `maxPence`, `reason` and an optional `estimate`. It sends a GET to
 the URL and pays its x402 price in tGBP on Base Sepolia from the agent's wallet, through the

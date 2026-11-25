@@ -303,22 +303,26 @@ export function createAgentActions(options: AgentActionsOptions) {
         if (created.status === 'replayed') {
           redemption = (await api.redemptions.get(redemption.redemptionId)).data
         }
-        assertRedemptionMatches(redemption, token, params.bankId, amount)
       } catch (error) {
         throw notBurned(error, redemption.redemptionId, idempotencyKey)
       }
+      try {
+        assertRedemptionMatches(redemption, token, params.bankId, amount)
+      } catch (error) {
+        // The API's current record is final: a retry would only read it again.
+        await closeSubmission('redeem', inputs, idempotencyKey)
+        throw notBurned(error, redemption.redemptionId, idempotencyKey)
+      }
       // Recorded before the burn is sent, so a retry after a crash never burns a second time.
+      // A refusal here means another attempt holds the record and may be burning: never wrap it
+      // as "nothing was burned", or the agent might cancel a redemption being burned.
       if (submissions && idempotencyKey) {
-        try {
-          await submissions.burning(
-            inputs,
-            idempotencyKey,
-            redemption.redemptionId,
-            redemption.burnAddress,
-          )
-        } catch (error) {
-          throw notBurned(error, redemption.redemptionId, idempotencyKey)
-        }
+        await submissions.burning(
+          inputs,
+          idempotencyKey,
+          redemption.redemptionId,
+          redemption.burnAddress,
+        )
       }
       let hash: Hex
       try {
@@ -335,6 +339,14 @@ export function createAgentActions(options: AgentActionsOptions) {
           await closeSubmission('redeem', inputs, idempotencyKey, 'burning')
         }
         throw failed
+      }
+      // On disk before the result is held for its reader: an unread burn stays refused, by hash.
+      if (submissions && idempotencyKey) {
+        await submissions.burnSent(inputs, idempotencyKey, hash).catch((error: unknown) => {
+          console.error(
+            `tgbp: could not record burn ${hash} in ${submissions.path}: ${String(error)}`,
+          )
+        })
       }
       await succeeded(() => closeSubmission('redeem', inputs, idempotencyKey, 'burning'))
       return { redemption: created, burned: true, burnHash: hash }

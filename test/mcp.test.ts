@@ -899,6 +899,21 @@ describe('tasks on a 2026-07-28 connection', () => {
     })
   })
 
+  it('refuses a redeem retry by transaction when a burned task was never read', async () => {
+    const args = { chain: 'sepolia', bankId: 'bank_ok', amount: '50' }
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    const tasks = await connectTasks()
+    await expect(tasks.client.callTool({ name: 'tgbp_redeem', arguments: args })).rejects.toThrow()
+    await vi.waitFor(() => expect(chain.transfer).toHaveBeenCalledTimes(1))
+    await vi.waitFor(async () => {
+      const { body } = await call(await connect(), 'tgbp_redeem', args)
+      expect(body.message).toMatch(/red_1 .*sent in transaction 0xburn/)
+    })
+    expect(chain.transfer).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses to cancel a submitted task', async () => {
     let answer = (_value: unknown) => {}
     api.mints.create.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
