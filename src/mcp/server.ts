@@ -39,7 +39,7 @@ import {
 type X402Client = typeof import('../x402/client.js')
 type PaymentFetch = ReturnType<X402Client['createTgbpPaymentFetch']>
 
-export interface TgbpMcpServerOptions extends Omit<AgentActionsOptions, 'guard'> {
+export interface TgbpMcpServerOptions extends Omit<AgentActionsOptions, 'guard' | 'submissions'> {
   policy: SpendPolicy
   /** The append-only spend ledger for this policy. */
   ledgerPath: string

@@ -166,12 +166,40 @@ export function createAgentActions(options: AgentActionsOptions) {
     return (await submissions.open(tool, inputs, idempotencyKey)).idempotencyKey
   }
 
+  /**
+   * Closes a submission whose answer arrived. A failure to close never hides
+   * that answer: the submission stays open, and the next request with the
+   * same inputs gets the first record back, marked `replayed`.
+   */
   async function closeSubmission(
     tool: SubmissionTool,
     inputs: Record<string, unknown>,
     idempotencyKey: string | undefined,
+    stage: 'submitted' | 'burning' = 'submitted',
   ): Promise<void> {
-    if (submissions && idempotencyKey) await submissions.close(tool, inputs, idempotencyKey)
+    if (!submissions || !idempotencyKey) return
+    try {
+      await submissions.close(tool, inputs, idempotencyKey, stage)
+    } catch (error) {
+      console.error(
+        `tgbp: could not close ${tool} ${idempotencyKey} in ${submissions.path}: ${String(error)}`,
+      )
+    }
+  }
+
+  /** Sends a create; an API refusal closes the submission, since nothing was created. */
+  async function send<T>(
+    tool: SubmissionTool,
+    inputs: Record<string, unknown>,
+    idempotencyKey: string | undefined,
+    request: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await request()
+    } catch (error) {
+      if (refusedByApi(error)) await closeSubmission(tool, inputs, idempotencyKey)
+      throw error
+    }
   }
 
   /** A key goes in the create options; without one the API client generates its own. */
@@ -191,7 +219,7 @@ export function createAgentActions(options: AgentActionsOptions) {
     })
     const inputs = {
       chain: token.chain,
-      destinationAddress: params.destinationAddress,
+      destinationAddress: evmLower(params.destinationAddress),
       amount,
       customerId: params.customerId || undefined,
     }
@@ -199,14 +227,16 @@ export function createAgentActions(options: AgentActionsOptions) {
     return {
       idempotencyKey,
       async submit() {
-        const result = await api.mints.create(
-          {
-            chain: token.chain,
-            destinationAddress: params.destinationAddress,
-            amount: { currency: 'GBP', value },
-            ...(params.customerId ? { customerId: params.customerId } : {}),
-          },
-          keyOptions(idempotencyKey),
+        const result = await send('mint', inputs, idempotencyKey, () =>
+          api.mints.create(
+            {
+              chain: token.chain,
+              destinationAddress: params.destinationAddress,
+              amount: { currency: 'GBP', value },
+              ...(params.customerId ? { customerId: params.customerId } : {}),
+            },
+            keyOptions(idempotencyKey),
+          ),
         )
         await closeSubmission('mint', inputs, idempotencyKey)
         return result
@@ -220,18 +250,20 @@ export function createAgentActions(options: AgentActionsOptions) {
     const { amount, value } = gbp(params.amount)
     const baseUnits = parseAmount(amount, token.decimals)
     const clients = evmClients(token)
-    await guard.authorize({
-      action: 'redeem',
-      chain: token.chain,
-      destination: params.bankId,
-      amount,
-    })
     const inputs = {
       chain: token.chain,
       bankId: params.bankId,
       amount,
       reference: params.reference || undefined,
     }
+    // Refused before the guard counts it or asks a human: its burn may already have been sent.
+    await submissions?.assertNotBurning(inputs)
+    await guard.authorize({
+      action: 'redeem',
+      chain: token.chain,
+      destination: params.bankId,
+      amount,
+    })
     const idempotencyKey = await openSubmission('redeem', inputs, undefined)
     const body = {
       chain: token.chain,
@@ -242,15 +274,21 @@ export function createAgentActions(options: AgentActionsOptions) {
     return {
       idempotencyKey,
       async submit() {
-        const created = idempotencyKey
-          ? await api.redemptions.create(body, { idempotencyKey })
-          : await api.redemptions.create(body)
+        const created = await send('redeem', inputs, idempotencyKey, () =>
+          idempotencyKey
+            ? api.redemptions.create(body, { idempotencyKey })
+            : api.redemptions.create(body),
+        )
         // A second approver must act first; nothing is burned, and the spend stays counted.
         if (created.status === 'pending_approval') {
           await closeSubmission('redeem', inputs, idempotencyKey)
           return { redemption: created, burned: false }
         }
-        const redemption: Redemption = created.data
+        let redemption: Redemption = created.data
+        // A replay returns the record as it was created; the burn needs its state now.
+        if (created.status === 'replayed') {
+          redemption = (await api.redemptions.get(redemption.redemptionId)).data
+        }
         try {
           assertRedemptionMatches(redemption, token, params.bankId, amount)
         } catch (error) {
@@ -274,11 +312,11 @@ export function createAgentActions(options: AgentActionsOptions) {
           const failed = burnFailed(error, redemption.redemptionId, idempotencyKey)
           // Only a burn known to have moved nothing may be retried; any other stays recorded as sent.
           if (isTgbpKitError(error) && NOT_BURNED.has(error.code)) {
-            await closeSubmission('redeem', inputs, idempotencyKey)
+            await closeSubmission('redeem', inputs, idempotencyKey, 'burning')
           }
           throw failed
         }
-        await closeSubmission('redeem', inputs, idempotencyKey)
+        await closeSubmission('redeem', inputs, idempotencyKey, 'burning')
         return { redemption: created, burned: true, burnHash: hash }
       },
     }
@@ -315,7 +353,7 @@ export function createAgentActions(options: AgentActionsOptions) {
       chain,
       direction: params.direction,
       amount,
-      recipient: params.recipient,
+      recipient: params.recipient.toLowerCase(),
       minOut: params.minOut || undefined,
     }
     const idempotencyKey = await openSubmission('swap', inputs, params.idempotencyKey)
@@ -323,15 +361,17 @@ export function createAgentActions(options: AgentActionsOptions) {
     return {
       idempotencyKey,
       async submit() {
-        const result = await swap.createConversion(
-          {
-            chainId: swapChain,
-            direction: params.direction,
-            recipientAddress: params.recipient,
-            [amountField]: amount,
-            ...(params.minOut ? { minOut: params.minOut } : {}),
-          },
-          keyOptions(idempotencyKey),
+        const result = await send('swap', inputs, idempotencyKey, () =>
+          swap.createConversion(
+            {
+              chainId: swapChain,
+              direction: params.direction,
+              recipientAddress: params.recipient,
+              [amountField]: amount,
+              ...(params.minOut ? { minOut: params.minOut } : {}),
+            },
+            keyOptions(idempotencyKey),
+          ),
         )
         await closeSubmission('swap', inputs, idempotencyKey)
         return result
@@ -372,6 +412,23 @@ function assertRedemptionMatches(
   }
   if (returned !== parseAmount(amount, 18)) throw mismatch('amount')
   if (!isAddress(redemption.burnAddress)) throw mismatch('burn address')
+}
+
+/** An EVM address hashes the same in any letter case; any other address is case-sensitive. */
+function evmLower(address: string): string {
+  return isAddress(address) ? address.toLowerCase() : address
+}
+
+/** Statuses that refuse a request without deciding it; a retry with the same key may still succeed. */
+const UNDECIDED_STATUSES = new Set([408, 409, 425, 429])
+
+/** The API answered with a 4xx that created nothing, so a retry needs no saved key. */
+function refusedByApi(error: unknown): boolean {
+  if (!isTgbpKitError(error) || error.code !== 'API_ERROR') return false
+  const status = error.details.status
+  return (
+    typeof status === 'number' && status >= 400 && status < 500 && !UNDECIDED_STATUSES.has(status)
+  )
 }
 
 /** Failures raised before the burn was broadcast, or by a mined revert: no tGBP moved. */

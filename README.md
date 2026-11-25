@@ -327,10 +327,12 @@ end when the client exits or the server stops. A retry with the same inputs is s
 it sends a mint, redemption or swap, the server saves the request's idempotency key to the
 submission journal, `<ledger file>.submissions.jsonl`, keyed by the request's inputs. A retry with
 the same inputs resends that key, and the API returns the first record instead of creating a second.
-Once an answer arrives, the same inputs count as a new request with a new key. A saved key is reused
-for 24 hours, as long as the API keeps it. If the server stopped while a redemption's burn was being
-sent, a retry is refused, because a second burn would destroy the tGBP twice: check the burn address
-on chain first.
+Once the API creates the record, or refuses the request with a 4xx, the same inputs count as a new
+request with a new key. After any other failure the key stays saved, so a retry resends it. A saved key
+is reused for 24 hours, as long as the API keeps it. If the server stopped while a redemption's burn
+was being sent, every retry with those inputs is refused, because a second burn would destroy the tGBP
+twice. Check the burn address on chain; if the burn never arrived, cancel that redemption and redeem
+with a different reference.
 
 `tgbp_x402_pay` takes `url`, `maxPence`, `reason` and an optional `estimate`. It sends a GET to
 the URL and pays its x402 price in tGBP on Base Sepolia from the agent's wallet, through the

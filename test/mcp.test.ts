@@ -54,6 +54,7 @@ const api = {
   mints: { create: vi.fn(async (_body?: unknown, _opts?: unknown): Promise<unknown> => minted()) },
   redemptions: {
     create: vi.fn(async (): Promise<unknown> => created()),
+    get: vi.fn(async (): Promise<unknown> => ({ data: created().data })),
   },
 }
 function created(overrides: Record<string, unknown> = {}) {
@@ -951,6 +952,42 @@ describe('a retry after the server dies mid-call', () => {
     expect(body.message).toMatch(/red_1 .*burn may have been sent/)
     expect(chain.transfer).toHaveBeenCalledTimes(1)
     expect(api.redemptions.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('burns nothing for a replayed redemption that is no longer pending', async () => {
+    api.redemptions.create.mockResolvedValueOnce({
+      ...created({ amount: { amount: '50.00', currency: 'GBP' } }),
+      status: 'replayed',
+    })
+    api.redemptions.get.mockResolvedValueOnce({
+      data: created({ amount: { amount: '50.00', currency: 'GBP' }, status: 'cancelled' }).data,
+    })
+    const { isError, body } = await call(await connect(), 'tgbp_redeem', {
+      chain: 'sepolia',
+      bankId: 'bank_ok',
+      amount: '50',
+    })
+    expect(isError).toBe(true)
+    expect(body.message).toContain('(status cancelled)')
+    expect(api.redemptions.get).toHaveBeenCalledWith('red_1')
+    expect(chain.transfer).not.toHaveBeenCalled()
+  })
+
+  it('sends a new key after the API refused the first request', async () => {
+    api.mints.create.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/v1/mints returned 422', {
+        details: { status: 422, requestId: 'req_1' },
+      }),
+    )
+    const args = { chain: 'sepolia', destinationAddress: AGENT, amount: '10' }
+    const client = await connect()
+    expect((await call(client, 'tgbp_mint', args)).isError).toBe(true)
+    expect((await call(client, 'tgbp_mint', args)).isError).toBe(false)
+    const keys = api.mints.create.mock.calls.map(
+      (callArgs) =>
+        (callArgs as unknown as [unknown, { idempotencyKey: string }])[1].idempotencyKey,
+    )
+    expect(new Set(keys).size).toBe(2)
   })
 
   it('starts a new submission with a new key once the first one answered', async () => {

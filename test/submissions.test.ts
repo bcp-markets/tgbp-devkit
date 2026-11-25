@@ -61,4 +61,28 @@ describe('submission journal', () => {
     )
     await expect(journal().open('redeem', inputs)).rejects.toThrow(/red_1 .*may have been sent/)
   })
+
+  it('keeps refusing a redemption whose burn may have been sent, at any age', async () => {
+    const { idempotencyKey } = await journal().open('redeem', inputs)
+    await journal().burning(inputs, idempotencyKey, 'red_1')
+    now = new Date(now.getTime() + 30 * SUBMISSION_KEY_LIFETIME_MS)
+    await expect(journal().open('redeem', inputs)).rejects.toThrow(/red_1/)
+    await expect(journal().assertNotBurning(inputs)).rejects.toThrow(/different reference/)
+  })
+
+  it('ignores a close from a slower attempt once a newer submission is open', async () => {
+    const first = await journal().open('mint', inputs)
+    await journal().close('mint', inputs, first.idempotencyKey)
+    const second = await journal().open('mint', inputs)
+    await journal().close('mint', inputs, first.idempotencyKey)
+    expect(await journal().open('mint', inputs)).toEqual({
+      idempotencyKey: second.idempotencyKey,
+      resumed: true,
+    })
+  })
+
+  it('refuses an invalid explicit key without saving it', async () => {
+    await expect(journal().open('mint', inputs, 'not a key!')).rejects.toThrow(RangeError)
+    expect((await journal().open('mint', inputs)).resumed).toBe(false)
+  })
 })

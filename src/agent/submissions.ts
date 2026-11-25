@@ -14,7 +14,7 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
-import { generateIdempotencyKey } from '../api/http.js'
+import { assertIdempotencyKey, generateIdempotencyKey } from '../api/http.js'
 import { appendSynced, LOCK_WAIT_MS, withFileLock } from './ledger.js'
 
 /** The API keeps an idempotency key for 24 hours; an older open submission cannot be deduped. */
@@ -65,15 +65,12 @@ export class SubmissionJournal {
     inputs: Record<string, unknown>,
     idempotencyKey?: string,
   ): Promise<Submission> {
+    // A key the API would refuse must never be saved, or every retry would resend it.
+    if (idempotencyKey !== undefined) assertIdempotencyKey(idempotencyKey)
     const hash = hashInputs(tool, inputs)
     return withFileLock(this.path, 'submission journal', this.lockWaitMs, async () => {
       const last = this.latest(await this.entries(), hash)
-      if (last?.stage === 'burning') {
-        throw new Error(
-          `Redemption ${last.redemptionId} for these inputs was created and its burn may have been sent ` +
-            `(idempotency key ${last.idempotencyKey}); check the burn address on chain before you redeem again`,
-        )
-      }
+      if (last?.stage === 'burning') throw burnMayHaveBeenSent(last)
       // An explicit key is the agent naming the attempt it retries.
       if (last && (idempotencyKey === undefined || idempotencyKey === last.idempotencyKey)) {
         return { idempotencyKey: last.idempotencyKey, resumed: true }
@@ -111,16 +108,32 @@ export class SubmissionJournal {
     })
   }
 
-  /** Closes the submission: its answer arrived, so the same inputs are a new submission. */
+  /**
+   * Throws if a redemption with these inputs may have had its burn sent, so a
+   * retry is refused before the spend guard counts it or asks a human.
+   */
+  async assertNotBurning(inputs: Record<string, unknown>): Promise<void> {
+    const last = this.latest(await this.entries(), hashInputs('redeem', inputs))
+    if (last?.stage === 'burning') throw burnMayHaveBeenSent(last)
+  }
+
+  /**
+   * Closes the submission: its answer arrived, so the same inputs are a new
+   * submission. Does nothing unless `idempotencyKey` is still the open key at
+   * `stage`, so a slower attempt never closes a newer one or its burn record.
+   */
   async close(
     tool: SubmissionTool,
     inputs: Record<string, unknown>,
     idempotencyKey: string,
+    stage: 'submitted' | 'burning' = 'submitted',
   ): Promise<void> {
     const hash = hashInputs(tool, inputs)
-    await withFileLock(this.path, 'submission journal', this.lockWaitMs, () =>
-      this.append({ inputs: hash, tool, idempotencyKey, stage: 'closed' }),
-    )
+    await withFileLock(this.path, 'submission journal', this.lockWaitMs, async () => {
+      const last = this.latest(await this.entries(), hash)
+      if (last?.idempotencyKey !== idempotencyKey || last.stage !== stage) return
+      await this.append({ inputs: hash, tool, idempotencyKey, stage: 'closed' })
+    })
   }
 
   /** Every entry, oldest first. Throws if the journal cannot be read. */
@@ -138,7 +151,10 @@ export class SubmissionJournal {
       .map((line, index) => parseEntry(line, index + 1, this.path))
   }
 
-  /** The open submission for `hash`, if its key is young enough for the API to dedupe it. */
+  /**
+   * The open submission for `hash`: one whose key is young enough for the API
+   * to dedupe it, or a redemption whose burn may have been sent, at any age.
+   */
   private latest(entries: SubmissionEntry[], hash: string): SubmissionEntry | undefined {
     let last: SubmissionEntry | undefined
     let opened: SubmissionEntry | undefined
@@ -150,7 +166,8 @@ export class SubmissionJournal {
       last = entry
     }
     if (!last || !opened || last.stage === 'closed') return undefined
-    // Past the key's lifetime the API would not dedupe it, and a redemption's burn has long settled.
+    // A burn that may have been sent never expires: a second one would destroy the tGBP twice.
+    if (last.stage === 'burning') return last
     if (this.now().getTime() - Date.parse(opened.at) > SUBMISSION_KEY_LIFETIME_MS) return undefined
     return last
   }
@@ -159,6 +176,14 @@ export class SubmissionJournal {
     const line: SubmissionEntry = { at: this.now().toISOString(), ...entry }
     return appendSynced(this.path, `${JSON.stringify(line)}\n`)
   }
+}
+
+function burnMayHaveBeenSent(entry: SubmissionEntry): Error {
+  return new Error(
+    `Redemption ${entry.redemptionId} for these inputs was created and its burn may have been sent ` +
+      `(idempotency key ${entry.idempotencyKey}); nothing was sent now. Check the burn address on chain. ` +
+      'If the burn never arrived, cancel that redemption and redeem with a different reference.',
+  )
 }
 
 /** A stable hash of the tool and its canonical inputs; absent and undefined fields are the same. */

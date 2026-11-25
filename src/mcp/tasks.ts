@@ -71,13 +71,22 @@ export class TaskStore {
       pollIntervalMs: POLL_INTERVAL_MS,
     }
     this.tasks.set(task.taskId, task)
-    run().then(
-      (result) => this.finish(task, { status: 'completed', result }),
-      (error: unknown) => {
-        const failure = fail(error)
-        this.finish(task, { status: 'failed', error: failure, statusMessage: failure.message })
-      },
-    )
+    // Never rejects: a task always finishes, and a stray rejection would stop a stdio server.
+    void (async () => {
+      let update: Partial<TgbpTask>
+      try {
+        update = { status: 'completed', result: await run() }
+      } catch (error) {
+        let failure: TaskError
+        try {
+          failure = fail(error)
+        } catch {
+          failure = { code: ProtocolErrorCode.InternalError, message: 'The task failed', data: {} }
+        }
+        update = { status: 'failed', error: failure, statusMessage: failure.message }
+      }
+      this.finish(task, update)
+    })()
     return { ...task }
   }
 
