@@ -46,7 +46,8 @@
                   "confirmed",
                   "failed",
                   "cancelled",
-                  "pending_compliance_review"
+                  "pending_compliance_review",
+                  "returned"
                 ]
               }
             },
@@ -162,7 +163,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MintResponse"
+                  "$ref": "#/components/schemas/MintDetailResponse"
                 }
               }
             }
@@ -401,7 +402,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedemptionListResponse"
+                  "$ref": "#/components/schemas/RedemptionWithProofWarningListResponse"
                 }
               }
             }
@@ -436,7 +437,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedemptionResponse"
+                  "$ref": "#/components/schemas/RedemptionCreateResponse"
                 }
               }
             }
@@ -518,7 +519,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedemptionResponse"
+                  "$ref": "#/components/schemas/RedemptionWithProofWarningResponse"
                 }
               }
             }
@@ -582,6 +583,44 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "object",
+                          "properties": {
+                            "details": {
+                              "type": "object",
+                              "properties": {
+                                "reason": {
+                                  "type": "string",
+                                  "enum": [
+                                    "burn_not_recorded",
+                                    "burn_not_bound"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
           }
         }
       }
@@ -779,6 +818,15 @@
           }
         }
       },
+      "InternalServerError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
       "NotFound": {
         "headers": {
           "X-Rate-Limit-Limit": {
@@ -905,6 +953,7 @@
               "redemptionId",
               "burnTxHash",
               "status",
+              "redemptionStatus",
               "bankProviderCode"
             ],
             "properties": {
@@ -914,12 +963,21 @@
               "burnTxHash": {
                 "type": "string"
               },
+              "redemptionStatus": {
+                "type": "string"
+              },
               "status": {
                 "type": "string",
                 "enum": [
                   "payout_initiated",
                   "payout_skipped",
                   "payout_withheld"
+                ]
+              },
+              "holdCause": {
+                "type": "string",
+                "enum": [
+                  "ownership_unproven"
                 ]
               },
               "message": {
@@ -1104,7 +1162,8 @@
               "confirmed",
               "failed",
               "cancelled",
-              "pending_compliance_review"
+              "pending_compliance_review",
+              "returned"
             ]
           },
           "cancelled_at": {
@@ -1320,6 +1379,17 @@
           }
         }
       },
+      "MintDetailResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MintWithTxHashes"
+          }
+        }
+      },
       "MintListResponse": {
         "type": "object",
         "required": [
@@ -1330,7 +1400,7 @@
           "data": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Mint"
+              "$ref": "#/components/schemas/MintWithTxHashes"
             }
           },
           "pagination": {
@@ -1348,6 +1418,48 @@
             "$ref": "#/components/schemas/Mint"
           }
         }
+      },
+      "MintTxHashes": {
+        "type": "object",
+        "required": [
+          "sourceChainId",
+          "sourceTxHash",
+          "bridgeTxHash",
+          "destinationTxHash",
+          "partnerTransferTxHash"
+        ],
+        "properties": {
+          "sourceChainId": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceTxHash": {
+            "type": "string",
+            "nullable": true
+          },
+          "bridgeTxHash": {
+            "type": "string",
+            "nullable": true
+          },
+          "destinationTxHash": {
+            "type": "string",
+            "nullable": true
+          },
+          "partnerTransferTxHash": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "MintWithTxHashes": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Mint"
+          },
+          {
+            "$ref": "#/components/schemas/MintTxHashes"
+          }
+        ]
       },
       "Pagination": {
         "type": "object",
@@ -1753,21 +1865,14 @@
           }
         }
       },
-      "RedemptionListResponse": {
+      "RedemptionCreateResponse": {
         "type": "object",
         "required": [
-          "data",
-          "pagination"
+          "data"
         ],
         "properties": {
           "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Redemption"
-            }
-          },
-          "pagination": {
-            "$ref": "#/components/schemas/Pagination"
+            "$ref": "#/components/schemas/RedemptionWithProofWarning"
           }
         }
       },
@@ -1832,6 +1937,65 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/Redemption"
+          }
+        }
+      },
+      "RedemptionWithProofWarning": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Redemption"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "proofWarning": {
+                "type": "object",
+                "required": [
+                  "message",
+                  "unprovenBurnAddresses"
+                ],
+                "properties": {
+                  "message": {
+                    "type": "string"
+                  },
+                  "unprovenBurnAddresses": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "RedemptionWithProofWarningListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "pagination"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedemptionWithProofWarning"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        }
+      },
+      "RedemptionWithProofWarningResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/RedemptionWithProofWarning"
           }
         }
       }

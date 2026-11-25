@@ -46,6 +46,9 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
@@ -156,8 +159,14 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -251,7 +260,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/DecimalAmount"
             }
           },
           {
@@ -259,7 +268,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/DecimalAmount"
             }
           },
           {
@@ -294,6 +303,9 @@
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
           }
         }
       }
@@ -368,11 +380,17 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
@@ -527,6 +545,24 @@
           }
         }
       },
+      "Forbidden": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "InternalServerError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
       "NotFound": {
         "content": {
           "application/json": {
@@ -587,10 +623,25 @@
       }
     },
     "schemas": {
+      "CapabilityChainId": {
+        "type": "string",
+        "enum": [
+          "base",
+          "ethereum",
+          "arbitrum",
+          "polygon",
+          "sepolia",
+          "solana",
+          "solana-devnet"
+        ]
+      },
       "ChainId": {
         "type": "string",
         "enum": [
           "base",
+          "ethereum",
+          "arbitrum",
+          "polygon",
           "sepolia"
         ]
       },
@@ -603,6 +654,15 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "destinationChainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "routeCapabilityId": {
+            "type": "string"
           },
           "sourceCurrency": {
             "$ref": "#/components/schemas/Currency"
@@ -629,6 +689,12 @@
           },
           "status": {
             "$ref": "#/components/schemas/ConversionStatus"
+          },
+          "receivedRawAmount": {
+            "type": "string"
+          },
+          "excessRawAmount": {
+            "type": "string"
           }
         }
       },
@@ -646,10 +712,14 @@
       "CreateConversionRequest": {
         "type": "object",
         "required": [
-          "chainId"
+          "chainId",
+          "intentId"
         ],
         "properties": {
           "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "destinationChainId": {
             "$ref": "#/components/schemas/ChainId"
           },
           "direction": {
@@ -662,16 +732,26 @@
             "$ref": "#/components/schemas/EvmAddress"
           },
           "usdcAmount": {
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UsdcAmount"
+              }
+            ]
           },
           "tgbpAmount": {
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TgbpAmount"
+              }
+            ]
           },
           "minOut": {
-            "type": "string"
+            "type": "string",
+            "deprecated": true
           },
           "minTargetAmount": {
-            "type": "string"
+            "type": "string",
+            "deprecated": true
           }
         }
       },
@@ -682,7 +762,6 @@
           "chainId",
           "direction",
           "recipientAddress",
-          "sourceAmount",
           "sourceRawAmount"
         ],
         "properties": {
@@ -692,6 +771,9 @@
           "chainId": {
             "$ref": "#/components/schemas/ChainId"
           },
+          "destinationChainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
           "direction": {
             "$ref": "#/components/schemas/SwapDirection"
           },
@@ -699,10 +781,13 @@
             "$ref": "#/components/schemas/EvmAddress"
           },
           "sourceAmount": {
-            "type": "string"
+            "type": "string",
+            "deprecated": true
           },
           "sourceRawAmount": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^[0-9]+$"
           },
           "targetAmount": {
             "type": "string",
@@ -716,6 +801,11 @@
           "USDC",
           "tGBP"
         ]
+      },
+      "DecimalAmount": {
+        "type": "string",
+        "maxLength": 40,
+        "pattern": "^\\d+(\\.\\d+)?$"
       },
       "Deposit": {
         "type": "object",
@@ -768,6 +858,9 @@
           },
           "exchange": {
             "$ref": "#/components/schemas/DepositExchange"
+          },
+          "excess": {
+            "$ref": "#/components/schemas/DepositExcess"
           }
         }
       },
@@ -816,15 +909,57 @@
           }
         }
       },
+      "DepositExcess": {
+        "type": "object",
+        "required": [
+          "rawAmount",
+          "status"
+        ],
+        "properties": {
+          "rawAmount": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "held",
+              "returning",
+              "returned"
+            ]
+          },
+          "txHash": {
+            "type": "string"
+          }
+        }
+      },
       "DepositExchange": {
         "type": "object",
         "properties": {
+          "swapIntentId": {
+            "type": "string"
+          },
+          "voidedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "settlementProgress": {
+            "$ref": "#/components/schemas/SwapSettlementProgress"
+          },
           "id": {
             "type": "string"
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "chainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "destinationChainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "routeCapabilityId": {
+            "type": "string"
           },
           "sourceCurrency": {
             "$ref": "#/components/schemas/Currency"
@@ -872,7 +1007,8 @@
               "address_required",
               "active",
               "risk_hold",
-              "disabled"
+              "disabled",
+              "unverified"
             ]
           },
           "canGenerateAddress": {
@@ -892,6 +1028,12 @@
               {
                 "$ref": "#/components/schemas/EvmAddress"
               }
+            ]
+          },
+          "fundingRequirement": {
+            "type": "string",
+            "enum": [
+              "registered_swap_intent"
             ]
           },
           "tokenSymbol": {
@@ -1119,6 +1261,11 @@
             "minimum": 0,
             "maximum": 9999
           },
+          "pricingSizeMultiplier": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
           "usdcUsdRate": {
             "type": "string"
           },
@@ -1190,7 +1337,14 @@
         "type": "object",
         "properties": {
           "id": {
-            "$ref": "#/components/schemas/ChainId"
+            "$ref": "#/components/schemas/CapabilityChainId"
+          },
+          "chainType": {
+            "type": "string",
+            "enum": [
+              "evm",
+              "solana"
+            ]
           },
           "displayName": {
             "type": "string"
@@ -1202,7 +1356,7 @@
             "$ref": "#/components/schemas/Currency"
           },
           "tokenAddress": {
-            "$ref": "#/components/schemas/EvmAddress"
+            "type": "string"
           },
           "tokenDecimals": {
             "type": "integer"
@@ -1227,6 +1381,12 @@
           },
           "chainId": {
             "$ref": "#/components/schemas/ChainId"
+          },
+          "destinationChainId": {
+            "$ref": "#/components/schemas/ChainId"
+          },
+          "routeCapabilityId": {
+            "type": "string"
           },
           "direction": {
             "$ref": "#/components/schemas/SwapDirection"
@@ -1331,6 +1491,55 @@
             "type": "string"
           }
         }
+      },
+      "SwapSettlementProgress": {
+        "type": "object",
+        "required": [
+          "stage"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "sweeping",
+              "preparing_bridge",
+              "bridging",
+              "retrying_bridge",
+              "transferring",
+              "refund_pending",
+              "refunding",
+              "refunded",
+              "recovery_required"
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "retryAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "refundTxHash": {
+            "type": "string"
+          }
+        }
+      },
+      "TgbpAmount": {
+        "type": "string",
+        "maxLength": 40,
+        "pattern": "^\\d+(\\.\\d{1,18})?$"
+      },
+      "UsdcAmount": {
+        "type": "string",
+        "maxLength": 40,
+        "pattern": "^\\d+(\\.\\d{1,6})?$"
       }
     }
   }

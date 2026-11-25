@@ -113,7 +113,11 @@ class TestRequests:
             TgbpClient(api_key="k", base_url="https://api.tgbp.io?x=1")
 
     def test_builds_the_query_from_the_spec_model(self, client: TgbpClient, transport: FakeTransport) -> None:
-        transport.replies.append(reply(200, {"data": [fixture("mint")], "pagination": fixture("pagination")}))
+        hashes = dict.fromkeys(
+            ["sourceChainId", "sourceTxHash", "bridgeTxHash", "destinationTxHash", "partnerTransferTxHash"]
+        )
+        listed = {**fixture("mint"), **hashes}
+        transport.replies.append(reply(200, {"data": [listed], "pagination": fixture("pagination")}))
         since = datetime(2026, 10, 1, tzinfo=timezone.utc)
         page = client.mints.list(ListMintsQuery(status=["pending", "paid"], from_=since, per_page=50))
         assert page.data[0].id == "mint_1"
@@ -179,7 +183,7 @@ class TestIdempotency:
         self, swap: TgbpSwapClient, transport: FakeTransport
     ) -> None:
         transport.replies.append(reply(201, {"data": {"id": "conv_1", "status": "requested"}}))
-        result = swap.create_conversion({"chainId": "sepolia"})
+        result = swap.create_conversion({"chainId": "sepolia", "intentId": "intent_1"})
         assert transport.calls[0].headers["idempotency-key"] == result.idempotency_key
         assert result.data.id == "conv_1"
 

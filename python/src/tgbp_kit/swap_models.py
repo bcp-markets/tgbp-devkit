@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Literal, TypeAlias
 
 from pydantic import AwareDatetime
@@ -11,13 +12,19 @@ from pydantic import AwareDatetime
 from ._base import Model
 
 
-ChainId: TypeAlias = Literal["base", "sepolia"] | str
+CapabilityChainId: TypeAlias = Literal["base", "ethereum", "arbitrum", "polygon", "sepolia", "solana", "solana-devnet"] | str
+
+
+ChainId: TypeAlias = Literal["base", "ethereum", "arbitrum", "polygon", "sepolia"] | str
 
 
 ConversionStatus: TypeAlias = Literal["requested", "sweep_pending", "submitted", "minted", "transferred", "failed"] | str
 
 
 Currency: TypeAlias = Literal["USDC", "tGBP"] | str
+
+
+DecimalAmount: TypeAlias = str
 
 
 EvmAddress: TypeAlias = str
@@ -29,13 +36,24 @@ SwapDirection: TypeAlias = Literal["USDC_TO_TGBP", "TGBP_TO_USDC"] | str
 SwapIntentId: TypeAlias = str
 
 
+TgbpAmount: TypeAlias = str
+
+
+UsdcAmount: TypeAlias = str
+
+
 class Conversion(Model):
+    chainId: ChainId | None = None
     createdAt: AwareDatetime | None = None
+    destinationChainId: ChainId | None = None
     discountBps: int | None = None
     effectiveRate: str | None = None
+    excessRawAmount: str | None = None
     gbpAmount: str | None = None
     id: str | None = None
     minimumTargetAmount: str | None = None
+    receivedRawAmount: str | None = None
+    routeCapabilityId: str | None = None
     sourceCurrency: Currency | None = None
     status: ConversionStatus | None = None
     targetCurrency: Currency | None = None
@@ -44,21 +62,23 @@ class Conversion(Model):
 
 class CreateConversionRequest(Model):
     chainId: ChainId
+    destinationChainId: ChainId | None = None
     direction: SwapDirection | None = None
-    intentId: SwapIntentId | None = None
+    intentId: SwapIntentId
     minOut: str | None = None
     minTargetAmount: str | None = None
     recipientAddress: EvmAddress | None = None
-    tgbpAmount: str | None = None
-    usdcAmount: str | None = None
+    tgbpAmount: TgbpAmount | None = None
+    usdcAmount: UsdcAmount | None = None
 
 
 class CreateSwapIntentRequest(Model):
     chainId: ChainId
+    destinationChainId: ChainId | None = None
     direction: SwapDirection
     id: SwapIntentId | None = None
     recipientAddress: EvmAddress
-    sourceAmount: str
+    sourceAmount: str | None = None
     sourceRawAmount: str
     targetAmount: str | None = None
 
@@ -68,6 +88,7 @@ class Deposit(Model):
     confirmationsSeen: int | None = None
     confirmedAt: AwareDatetime | None = None
     createdAt: AwareDatetime | None = None
+    excess: DepositExcess | None = None
     exchange: DepositExchange | None = None
     fromAddress: EvmAddress | None = None
     id: str | None = None
@@ -94,19 +115,31 @@ class DepositBalance(Model):
     tokenSymbol: Currency | None = None
 
 
+class DepositExcess(Model):
+    rawAmount: str
+    status: Literal["held", "returning", "returned"] | str
+    txHash: str | None = None
+
+
 class DepositExchange(Model):
+    chainId: ChainId | None = None
     createdAt: AwareDatetime | None = None
+    destinationChainId: ChainId | None = None
     discountBps: int | None = None
     effectiveRate: str | None = None
     gbpAmount: str | None = None
     id: str | None = None
     minimumTargetAmount: str | None = None
     rate: str | None = None
+    routeCapabilityId: str | None = None
+    settlementProgress: SwapSettlementProgress | None = None
     sourceCurrency: Currency | None = None
     status: ConversionStatus | None = None
+    swapIntentId: str | None = None
     targetCurrency: Currency | None = None
     tgbpTransferTxHash: str | None = None
     usdcAmount: str | None = None
+    voidedAt: AwareDatetime | None = None
 
 
 class DepositSession(Model):
@@ -116,9 +149,10 @@ class DepositSession(Model):
     chainId: ChainId | None = None
     chainName: str | None = None
     depositAddress: EvmAddress | None = None
+    fundingRequirement: Literal["registered_swap_intent"] | str | None = None
     id: str | None = None
     requiredConfirmations: int | None = None
-    status: Literal["address_required", "active", "risk_hold", "disabled"] | str | None = None
+    status: Literal["address_required", "active", "risk_hold", "disabled", "unverified"] | str | None = None
     tokenAddress: EvmAddress | None = None
     tokenDecimals: int | None = None
     tokenSymbol: Currency | None = None
@@ -183,6 +217,7 @@ class Quote(Model):
     pricingMarketDataFetchedAt: AwareDatetime | None = None
     pricingMode: Literal["production", "staging"] | str | None = None
     pricingQuality: PricingQuality | None = None
+    pricingSizeMultiplier: Decimal | None = None
     providerQuotes: list[PricingProviderQuote] | None = None
     rateExpiresAt: AwareDatetime
     rateRefreshSeconds: int
@@ -205,10 +240,11 @@ class SettlementRecipientOption(Model):
 
 class SupportedNetwork(Model):
     chainId: int | None = None
+    chainType: Literal["evm", "solana"] | str | None = None
     displayName: str | None = None
-    id: ChainId | None = None
+    id: CapabilityChainId | None = None
     requiredConfirmations: int | None = None
-    tokenAddress: EvmAddress | None = None
+    tokenAddress: str | None = None
     tokenDecimals: int | None = None
     tokenSymbol: Currency | None = None
 
@@ -217,6 +253,7 @@ class SwapIntent(Model):
     activeUntil: AwareDatetime | None = None
     chainId: ChainId | None = None
     createdAt: AwareDatetime | None = None
+    destinationChainId: ChainId | None = None
     direction: SwapDirection | None = None
     failureReason: str | None = None
     fillBy: AwareDatetime | None = None
@@ -226,6 +263,7 @@ class SwapIntent(Model):
     quote: Quote | None = None
     quoteVersion: int | None = None
     recipientAddress: EvmAddress | None = None
+    routeCapabilityId: str | None = None
     sourceAmount: str | None = None
     sourceCurrency: Currency | None = None
     sourceRawAmount: str | None = None
@@ -242,6 +280,14 @@ class SwapLimits(Model):
     dailyRemainingUsd: str
     maxTransactionUsd: str
     minTransactionUsd: str
+
+
+class SwapSettlementProgress(Model):
+    attempt: int | None = None
+    maxAttempts: int | None = None
+    refundTxHash: str | None = None
+    retryAt: AwareDatetime | None = None
+    stage: Literal["sweeping", "preparing_bridge", "bridging", "retrying_bridge", "transferring", "refund_pending", "refunding", "refunded", "recovery_required"] | str
 
 
 class CancelSwapIntentResponse(Model):
@@ -280,8 +326,8 @@ class GetLimitsResponse(Model):
 
 class GetQuoteQuery(Model):
     direction: SwapDirection | None = None
-    tgbpAmount: str | None = None
-    usdcAmount: str | None = None
+    tgbpAmount: DecimalAmount | None = None
+    usdcAmount: DecimalAmount | None = None
 
 
 class GetQuoteResponse(Model):
@@ -306,6 +352,7 @@ class ListDepositsResponse(Model):
 
 __all__ = [
     "CancelSwapIntentResponse",
+    "CapabilityChainId",
     "ChainId",
     "Conversion",
     "ConversionStatus",
@@ -315,8 +362,10 @@ __all__ = [
     "CreateSwapIntentRequest",
     "CreateSwapIntentResponse",
     "Currency",
+    "DecimalAmount",
     "Deposit",
     "DepositBalance",
+    "DepositExcess",
     "DepositExchange",
     "DepositSession",
     "ErrorResponse",
@@ -343,4 +392,7 @@ __all__ = [
     "SwapIntent",
     "SwapIntentId",
     "SwapLimits",
+    "SwapSettlementProgress",
+    "TgbpAmount",
+    "UsdcAmount",
 ]

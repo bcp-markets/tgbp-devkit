@@ -22,10 +22,10 @@ from .models import (
     MintResponse,
     Redemption,
     RedemptionCreateRequest,
-    RedemptionListResponse,
     RedemptionQuoteRequest,
     RedemptionQuoteResponse,
     RedemptionResponse,
+    RedemptionWithProofWarningListResponse,
     SimulateMintPayinResponse,
 )
 
@@ -195,10 +195,10 @@ class Redemptions:
         )
         return parse(RedemptionResponse, "GET", path, status, body)
 
-    def list(self, query: ListRedemptionsQuery | None = None) -> RedemptionListResponse:
+    def list(self, query: ListRedemptionsQuery | None = None) -> RedemptionWithProofWarningListResponse:
         path = "/api/v1/redemptions"
         status, body = _http.request(self._config, "GET", path, query=to_query(query), retry=True)
-        return parse(RedemptionListResponse, "GET", path, status, body)
+        return parse(RedemptionWithProofWarningListResponse, "GET", path, status, body)
 
     def cancel(
         self, redemption_id: str, body: CancelRequest | Mapping[str, Any] | None = None

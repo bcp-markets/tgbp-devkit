@@ -27,8 +27,10 @@ class BurnConfirmationRequest(Model):
 class BurnConfirmationResponseData(Model):
     bankProviderCode: str
     burnTxHash: str
+    holdCause: Literal["ownership_unproven"] | str | None = None
     message: str | None = None
     redemptionId: str
+    redemptionStatus: str
     status: Literal["payout_initiated", "payout_skipped", "payout_withheld"] | str
 
 
@@ -98,7 +100,7 @@ class Mint(Model):
     paymentType: Literal["first_party", "third_party"] | str
     relationshipToCustomer: Literal["business_customer_supplier", "family_friend_colleague", "employer_employee", "other", None] | str | None
     sourceBankAccountId: str | None = None
-    status: Literal["pending", "paid", "in_transit", "confirmed", "failed", "cancelled", "pending_compliance_review"] | str
+    status: Literal["pending", "paid", "in_transit", "confirmed", "failed", "cancelled", "pending_compliance_review", "returned"] | str
     tx_hash: str | None
     updated_at: AwareDatetime
 
@@ -133,13 +135,25 @@ class MintCreateRequest(Model):
     sourceBankAccountId: str | None = None
 
 
+class MintDetailResponse(Model):
+    data: MintWithTxHashes
+
+
 class MintListResponse(Model):
-    data: list[Mint]
+    data: list[MintWithTxHashes]
     pagination: Pagination
 
 
 class MintResponse(Model):
     data: Mint
+
+
+class MintTxHashes(Model):
+    bridgeTxHash: str | None
+    destinationTxHash: str | None
+    partnerTransferTxHash: str | None
+    sourceChainId: str | None
+    sourceTxHash: str | None
 
 
 class Pagination(Model):
@@ -263,9 +277,8 @@ class RedemptionCreateRequest(Model):
     reference: str | None = None
 
 
-class RedemptionListResponse(Model):
-    data: list[Redemption]
-    pagination: Pagination
+class RedemptionCreateResponse(Model):
+    data: RedemptionWithProofWarning
 
 
 class RedemptionQuoteRequest(Model):
@@ -288,12 +301,34 @@ class RedemptionResponse(Model):
     data: Redemption
 
 
+class RedemptionWithProofWarningListResponse(Model):
+    data: list[RedemptionWithProofWarning]
+    pagination: Pagination
+
+
+class RedemptionWithProofWarningResponse(Model):
+    data: RedemptionWithProofWarning
+
+
+class MintWithTxHashes(Mint, MintTxHashes):
+    pass
+
+
+class RedemptionWithProofWarningProofWarning(Model):
+    message: str
+    unprovenBurnAddresses: list[str]
+
+
+class RedemptionWithProofWarning(Redemption):
+    proofWarning: RedemptionWithProofWarningProofWarning | None = None
+
+
 class ListMintsQuery(Model):
     from_: AwareDatetime | None = Field(serialization_alias="from", default=None)
     page: int | None = None
     partnerId: str | None = None
     per_page: int | None = None
-    status: list[Literal["pending", "paid", "in_transit", "confirmed", "failed", "cancelled", "pending_compliance_review"] | str] | None = None
+    status: list[Literal["pending", "paid", "in_transit", "confirmed", "failed", "cancelled", "pending_compliance_review", "returned"] | str] | None = None
     to: AwareDatetime | None = None
 
 
@@ -333,8 +368,11 @@ __all__ = [
     "Mint",
     "MintBankTransferDetails",
     "MintCreateRequest",
+    "MintDetailResponse",
     "MintListResponse",
     "MintResponse",
+    "MintTxHashes",
+    "MintWithTxHashes",
     "Pagination",
     "PartnerMintBankTransferDetails",
     "RateLimitErrorResponse",
@@ -344,8 +382,8 @@ __all__ = [
     "RedemptionAmount",
     "RedemptionBankAccount",
     "RedemptionCreateRequest",
+    "RedemptionCreateResponse",
     "RedemptionFees",
-    "RedemptionListResponse",
     "RedemptionQuoteRequest",
     "RedemptionQuoteResponse",
     "RedemptionQuoteResponseData",
@@ -356,6 +394,10 @@ __all__ = [
     "RedemptionTransactionDataSolana",
     "RedemptionTransactionDataSolanaInstructionsItem",
     "RedemptionTransactionDataSolanaInstructionsItemAccountsItem",
+    "RedemptionWithProofWarning",
+    "RedemptionWithProofWarningListResponse",
+    "RedemptionWithProofWarningProofWarning",
+    "RedemptionWithProofWarningResponse",
     "SimulateMintPayinResponse",
     "SimulateMintPayinResponseData",
 ]

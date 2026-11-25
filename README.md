@@ -151,7 +151,9 @@ It defaults to production. For staging, pass the swap host from your onboarding 
 Every call that creates a mint, redemption, swap intent or conversion sends an idempotency key.
 The client generates one unless you pass `{ idempotencyKey }`, and returns it on the result.
 A retry with the same key returns the first record and never creates a second one. Keys are 1 to
-18 letters, digits, `_` or `-`, and last 24 hours.
+18 letters, digits, `_` or `-`, and last 24 hours. The swap API dedupes on the swap intent
+instead: a swap intent's `id` returns the same intent, and a conversion that names the same
+`intentId` returns that intent's one conversion.
 
 The client retries a network error or a 5xx response up to 3 times, with backoff, and resends the
 same key each time. It never retries a 4xx, including 429. It never retries a call that is unsafe
@@ -309,9 +311,14 @@ The tools are `tgbp_policy`, `tgbp_balance`, `tgbp_transfer`, `tgbp_mint`, `tgbp
 `tgbp_swap` and `tgbp_x402_pay`. On-chain actions run on EVM chains. `tgbp_redeem` creates the redemption, then
 burns the tGBP by sending it to the redemption's burn address, but only when the API's redemption
 is `pending` and matches the chain, amount and bank account asked for.
-`tgbp_swap` converts a deposit the
-swap API has already confirmed. `tgbp_mint` and `tgbp_swap` take an optional `idempotencyKey`:
-after an ambiguous failure, retry with the key from the error to get the first record back.
+`tgbp_swap` registers a swap intent, a firm quote, then converts the deposit that fills it. Never
+fund the swap deposit address before the intent exists: the swap API neither converts nor returns
+a deposit that no intent expects. Until the deposit confirms, `tgbp_swap` fails with the exact
+amount to send, the address to send it from (the recipient) and the deadline. Send it, then call
+`tgbp_swap` again with the same inputs to convert that intent. `minOut` is checked against the
+intent's quote, and an intent that pays less is cancelled. `tgbp_mint` and `tgbp_swap` take an
+optional `idempotencyKey`: after an ambiguous failure, retry with the key from the error to get the
+first record back. For a swap the key is the intent's id, so it is 6 to 18 characters.
 
 **Tasks.** On a 2026-07-28 connection whose client declares the MCP tasks extension
 (`io.modelcontextprotocol/tasks`), `tgbp_mint`, `tgbp_redeem` and `tgbp_swap` return a task handle
@@ -323,15 +330,16 @@ so a refusal comes back on the call and never as a task. A submitted task cannot
 clients get the result on the call itself.
 
 **Tasks end with the client.** `tgbp-mcp` runs over stdio and keeps tasks in memory, so its tasks
-end when the client exits or the server stops. A retry with the same inputs is still safe for a mint
-or a redemption. Before it sends one, the server saves the request's idempotency key to the
+end when the client exits or the server stops. A retry with the same inputs is still safe for a
+mint, a redemption or a swap. Before it sends one, the server saves the request's idempotency key to the
 submission journal, `<ledger file>.submissions.jsonl`, keyed by the request's inputs. A retry with
 the same inputs resends that key, and the API returns the first record instead of creating a second.
 The key stays saved until the API returns the record and, for a task, the client reads it; after
 that, the same inputs count as a new request with a new key. After a failure the key stays saved, so
-a retry resends it. A saved key is reused for 24 hours, as long as the API keeps it. A swap sends its
-saved key too, but the swap API does not dedupe conversions by idempotency key: before you retry a
-swap, check the deposit balance and the recipient.
+a retry resends it. A saved key is reused for 24 hours, as long as the API keeps it. A swap's saved
+key is its swap intent's id: a retry finds the same intent, and the swap API converts an intent at
+most once. An intent that expired or was cancelled frees the inputs, so the next swap with them
+registers a new intent.
 
 **A burn record needs a human.** Once a redemption exists, the server records its burn before
 sending it. If the server stops during the burn, or the burn fails in a way that may have sent it,

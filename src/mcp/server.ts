@@ -277,14 +277,18 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     {
       title: 'Swap USDC and tGBP',
       description:
-        'Convert a confirmed swap deposit and settle it to an allowed recipient. For the caps, a USDC amount counts as the same number of pounds.',
+        'Register a swap intent (a firm quote), then convert the deposit that fills it and settle it to an allowed recipient. Until the deposit confirms, the error says what to send, from where and by when; send it, then call again with the same inputs. Never fund the swap deposit address before calling. For the caps, a USDC amount counts as the same number of pounds.',
       inputSchema: z.object({
         chain,
         direction: z.enum(['USDC_TO_TGBP', 'TGBP_TO_USDC']),
         amount: amount.describe('The source amount: tGBP or USDC'),
         recipient: text().describe('Where the swapped tokens go'),
-        minOut: text().optional().describe('Refuse the swap if it pays out less than this'),
-        idempotencyKey,
+        minOut: text()
+          .optional()
+          .describe("Refuse the swap, and cancel its intent, if the intent's quote pays out less"),
+        idempotencyKey: idempotencyKey.describe(
+          'To retry an earlier swap, pass its intentId; never for a new one. A retry counts against the caps again.',
+        ),
       }),
       annotations: { destructiveHint: true, openWorldHint: true },
       _meta: REQUIRES_USER_INTERACTION,

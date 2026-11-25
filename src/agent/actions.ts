@@ -9,7 +9,13 @@ import { type Hex, isAddress, type PublicClient, type WalletClient } from 'viem'
 
 import { formatAmount, parseAmount } from '../amount.js'
 import type { CreateResult, Mint, Redemption, TgbpClient } from '../api/client.js'
-import type { Conversion, TgbpSwapClient } from '../api/swap.js'
+import { assertIdempotencyKey, generateIdempotencyKey } from '../api/http.js'
+import {
+  assertSwapIntentId,
+  type Conversion,
+  type SwapIntent,
+  type TgbpSwapClient,
+} from '../api/swap.js'
 import { isTgbpKitError, TgbpKitError } from '../errors.js'
 import { getBalance, transfer } from '../evm/index.js'
 import { type EvmTokenDeployment, getEvmToken, getToken } from '../registry/index.js'
@@ -57,8 +63,18 @@ export interface SwapParams {
   direction: SwapDirection
   amount: string
   recipient: string
+  /** Refuse the swap if its firm quote pays out less than this, in the target token. */
   minOut?: string
+  /** The swap intent id of an earlier attempt, to retry it: 6 to 18 letters, digits, "_" or "-". */
   idempotencyKey?: string
+}
+
+export interface SwapResult {
+  data: Conversion
+  /** The swap intent the conversion settles. */
+  intentId: string
+  /** The same as `intentId`: the swap API dedupes a swap on its intent. */
+  idempotencyKey: string
 }
 
 export type RedeemResult =
@@ -85,6 +101,7 @@ export type SwapDirection = 'USDC_TO_TGBP' | 'TGBP_TO_USDC'
 /** The API takes GBP to the penny. */
 const GBP_DECIMALS = 2
 const USDC_DECIMALS = 6
+const TGBP_DECIMALS = 18
 /** The chains the swap API serves (its ChainId). */
 const SWAP_CHAINS = ['base', 'sepolia'] as const
 
@@ -353,9 +370,13 @@ export function createAgentActions(options: AgentActionsOptions) {
     })
   }
 
-  async function prepareSwap(
-    params: SwapParams,
-  ): Promise<Prepared<{ data: Conversion; idempotencyKey: string }>> {
+  /**
+   * The swap API dedupes on the swap intent, not on an idempotency key: an
+   * intent's `id` returns the same intent, and the intent converts at most
+   * once. So the saved key is the intent's id, and every retry with the same
+   * inputs creates or finds that one intent and asks for its one conversion.
+   */
+  async function prepareSwap(params: SwapParams): Promise<Prepared<SwapResult>> {
     const swap = options.swap
     if (!swap) throw new Error('No swap API is configured; set TGBP_API_KEY and TGBP_SWAP_BASE_URL')
     const chain = getEvmToken(params.chain).chain
@@ -370,8 +391,19 @@ export function createAgentActions(options: AgentActionsOptions) {
         details: { chain, address: params.recipient },
       })
     }
-    const decimals = params.direction === 'USDC_TO_TGBP' ? USDC_DECIMALS : 18
-    const amount = formatAmount(parseAmount(params.amount, decimals), decimals)
+    // The key becomes the intent's id, so it must pass both formats: 6 to 18 characters.
+    if (params.idempotencyKey !== undefined) {
+      assertIdempotencyKey(params.idempotencyKey)
+      assertSwapIntentId(params.idempotencyKey)
+    }
+    const toTgbp = params.direction === 'USDC_TO_TGBP'
+    const decimals = toTgbp ? USDC_DECIMALS : TGBP_DECIMALS
+    const targetDecimals = toTgbp ? TGBP_DECIMALS : USDC_DECIMALS
+    const sourceRaw = parseAmount(params.amount, decimals)
+    const amount = formatAmount(sourceRaw, decimals)
+    const minOut = params.minOut
+      ? formatAmount(parseAmount(params.minOut, targetDecimals), targetDecimals)
+      : undefined
     // Caps are in pounds. A USDC amount counts as the same number of pounds,
     // which overstates it while a dollar is worth less than a pound.
     await guard.authorize({
@@ -385,23 +417,53 @@ export function createAgentActions(options: AgentActionsOptions) {
       direction: params.direction,
       amount,
       recipient: params.recipient.toLowerCase(),
-      minOut: params.minOut || undefined,
+      minOut,
     }
-    const idempotencyKey = await openSubmission('swap', inputs, params.idempotencyKey)
-    const amountField = params.direction === 'USDC_TO_TGBP' ? 'usdcAmount' : 'tgbpAmount'
-    return prepared(idempotencyKey, async (succeeded) => {
-      const result = await swap.createConversion(
-        {
-          chainId: swapChain,
-          direction: params.direction,
-          recipientAddress: params.recipient,
-          [amountField]: amount,
-          ...(params.minOut ? { minOut: params.minOut } : {}),
-        },
-        keyOptions(idempotencyKey),
-      )
-      await succeeded(() => closeSubmission('swap', inputs, idempotencyKey))
-      return result
+    const intentId =
+      (await openSubmission('swap', inputs, params.idempotencyKey)) ?? generateIdempotencyKey()
+    return prepared(intentId, async (succeeded): Promise<SwapResult> => {
+      const { data: intent } = await swap.createSwapIntent({
+        id: intentId,
+        chainId: swapChain,
+        destinationChainId: swapChain,
+        direction: params.direction,
+        recipientAddress: params.recipient,
+        sourceRawAmount: sourceRaw.toString(),
+      })
+      if (intent.status !== 'active' && intent.status !== 'converted') {
+        // This intent can never convert, so the same inputs may start a new one.
+        await closeSubmission('swap', inputs, intentId)
+        const reason = intent.failureReason ?? intent.withdrawalReason
+        throw new Error(
+          `Swap intent ${intentId} is ${intent.status}${reason ? ` (${reason})` : ''}; nothing ` +
+            'was converted. Call again to start a new swap intent.',
+        )
+      }
+      // The API ignores minOut: the intent's firm quote is binding, so it is checked here.
+      if (minOut !== undefined && intent.status === 'active') {
+        await assertPaysAtLeast(intent, minOut, targetDecimals, async () => {
+          await swap.cancelSwapIntent(intentId)
+          await closeSubmission('swap', inputs, intentId)
+        })
+      }
+      let result: { data: Conversion }
+      try {
+        result = await swap.createConversion(
+          {
+            chainId: swapChain,
+            destinationChainId: swapChain,
+            direction: params.direction,
+            intentId,
+            recipientAddress: params.recipient,
+            [toTgbp ? 'usdcAmount' : 'tgbpAmount']: amount,
+          },
+          { idempotencyKey: intentId },
+        )
+      } catch (error) {
+        throw awaitingDeposit(error, intent, amount, params.recipient) ?? error
+      }
+      await succeeded(() => closeSubmission('swap', inputs, intentId))
+      return { data: result.data, intentId, idempotencyKey: intentId }
     })
   }
 }
@@ -443,6 +505,64 @@ function assertRedemptionMatches(
 /** An EVM address hashes the same in any letter case; any other address is case-sensitive. */
 function evmLower(address: string): string {
   return isAddress(address) ? address.toLowerCase() : address
+}
+
+/**
+ * Throws unless the intent's firm quote pays at least `minOut`. Before it
+ * throws it runs `cancel`, so nothing can fill an intent the caller refused.
+ */
+async function assertPaysAtLeast(
+  intent: SwapIntent,
+  minOut: string,
+  decimals: number,
+  cancel: () => Promise<void>,
+): Promise<void> {
+  let target: bigint | undefined
+  try {
+    if (intent.targetRawAmount !== undefined && /^[0-9]+$/.test(intent.targetRawAmount)) {
+      target = BigInt(intent.targetRawAmount)
+    } else if (intent.targetAmount !== undefined) {
+      target = parseAmount(intent.targetAmount, decimals)
+    }
+  } catch {
+    target = undefined
+  }
+  if (target !== undefined && target >= parseAmount(minOut, decimals)) return
+  let after = 'It was cancelled, so nothing can fill it.'
+  try {
+    await cancel()
+  } catch (error) {
+    after = `Cancelling it failed, so do not fund it: ${reasonOf(error)}`
+  }
+  throw new Error(
+    `Swap intent ${intent.id} pays ${intent.targetAmount ?? 'an unknown amount'}, less than ` +
+      `minOut ${minOut}; nothing was converted. ${after}`,
+  )
+}
+
+/**
+ * The conversion was refused because no confirmed deposit fills the intent
+ * yet: says how to fund it. Undefined for any other failure.
+ */
+function awaitingDeposit(
+  error: unknown,
+  intent: SwapIntent,
+  amount: string,
+  depositor: string,
+): TgbpKitError | undefined {
+  if (!isTgbpKitError(error, 'API_ERROR')) return undefined
+  const details = error.details ?? {}
+  if (details.status !== 409 || details.apiCode !== 'confirmed_deposit_required') return undefined
+  const token = intent.direction === 'TGBP_TO_USDC' ? 'tGBP' : 'USDC'
+  const by = intent.fillBy ? ` before ${intent.fillBy}` : ''
+  return new TgbpKitError(
+    'API_ERROR',
+    `Swap intent ${intent.id} is registered, but no confirmed deposit fills it yet; nothing was ` +
+      `converted. Send exactly ${amount} ${token} from ${depositor} to your swap deposit ` +
+      `address${by}, then call again with the same inputs. The swap API also converts it on its ` +
+      'own once the deposit confirms.',
+    { cause: error, details: { ...details, intentId: intent.id, fillBy: intent.fillBy } },
+  )
 }
 
 /** Failures raised before the burn was broadcast, or by a mined revert: no tGBP moved. */
