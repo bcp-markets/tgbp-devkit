@@ -5,8 +5,7 @@
  * (elicitation). A client that cannot ask, a "no", and no answer before the
  * timeout all refuse it.
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { type CallToolResult, McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
 import { type AgentActionsOptions, createAgentActions } from '../agent/actions.js'
@@ -55,6 +54,12 @@ const MAX_X402_BODY_BYTES = 20_000
  * tool reports an unconfirmed payment before a client gives up on the call.
  */
 const X402_TIMEOUT_MS = 45_000
+
+/**
+ * Marks a tool that moves value: a client that honours it asks the human on
+ * every call, even in a mode that would otherwise run tools unprompted.
+ */
+const REQUIRES_USER_INTERACTION = { 'anthropic/requiresUserInteraction': true }
 
 export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const server = new McpServer({ name: 'tgbp', version: KIT_VERSION })
@@ -132,6 +137,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         "Send tGBP from this agent's wallet to an allowed destination. Counts against the per-transfer and daily caps.",
       inputSchema: { chain, to: text().describe('Recipient address'), amount },
       annotations: { destructiveHint: true, openWorldHint: true },
+      _meta: REQUIRES_USER_INTERACTION,
     },
     (args) => run(() => actions.transfer(args)),
   )
@@ -150,6 +156,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         idempotencyKey,
       },
       annotations: { destructiveHint: true, openWorldHint: true },
+      _meta: REQUIRES_USER_INTERACTION,
     },
     (args) => run(() => actions.mint(args)),
   )
@@ -167,6 +174,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         reference: text().optional(),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
+      _meta: REQUIRES_USER_INTERACTION,
     },
     (args) => run(() => actions.redeem(args)),
   )
@@ -186,6 +194,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         idempotencyKey,
       },
       annotations: { destructiveHint: true, openWorldHint: true },
+      _meta: REQUIRES_USER_INTERACTION,
     },
     (args) => run(() => actions.swap(args)),
   )
@@ -239,11 +248,12 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           .describe('Why you are paying; the spend ledger records it. Needed to pay.'),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
+      _meta: REQUIRES_USER_INTERACTION,
     },
-    ({ url, maxPence, estimate, reason }, extra) =>
+    ({ url, maxPence, estimate, reason }, ctx) =>
       run(async () => {
         // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
-        const signal = AbortSignal.any([extra.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
+        const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
         if (estimate) {
           const x402 = await loadX402()
           const quote = await x402.quoteTgbpPayment(url, { signal })

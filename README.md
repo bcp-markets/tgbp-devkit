@@ -10,10 +10,10 @@ client for the tGBP mint, redeem and swap API. The API client is also on PyPI fo
 npm install @bcptechnologies/tgbp-kit viem                                  # EVM
 npm install @bcptechnologies/tgbp-kit @solana/kit @solana-program/token    # Solana
 npm install @bcptechnologies/tgbp-kit                                       # API client only
-npm install @bcptechnologies/tgbp-kit viem @modelcontextprotocol/sdk zod    # MCP server for agents
+npm install @bcptechnologies/tgbp-kit viem @modelcontextprotocol/server zod # MCP server for agents
 ```
 
-`viem`, `@solana/kit`, `@solana-program/token`, `@modelcontextprotocol/sdk` and `zod` are optional
+`viem`, `@solana/kit`, `@solana-program/token`, `@modelcontextprotocol/server` and `zod` are optional
 peer dependencies: install only what you use.
 
 ## Token registry
@@ -261,7 +261,12 @@ on its own: if a process dies holding `<ledger>.lock`, actions are refused until
 client ([elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)).
 A "no", no answer before the timeout, and a client that cannot ask all refuse it. A timeout never
 approves. The threshold applies to each redemption; the daily cap bounds what several smaller
-ones can add up to.
+ones can add up to. For now the server asks only on a 2025-era connection, so a client on protocol
+2026-07-28 is refused as one that cannot ask.
+
+The transfer, mint, redeem, swap and x402 pay tools carry
+`_meta["anthropic/requiresUserInteraction"]: true`, so a client that honours it asks the human
+before every call, even in a mode that runs other tools unprompted.
 
 The first x402 payment to each service waits for a human too: through the MCP client for
 `tgbp_x402_pay`, and through the guard's `approver` for the x402 client. Once
@@ -277,7 +282,7 @@ approved payment `"firstPayment": true`.
   "mcpServers": {
     "tgbp": {
       "command": "npx",
-      "args": ["-y", "-p", "@bcptechnologies/tgbp-kit", "-p", "viem@2", "-p", "@modelcontextprotocol/sdk@1", "-p", "zod@4", "tgbp-mcp"],
+      "args": ["-y", "-p", "@bcptechnologies/tgbp-kit", "-p", "viem@2", "-p", "@modelcontextprotocol/server@2", "-p", "zod@4", "tgbp-mcp"],
       "env": {
         "TGBP_POLICY_FILE": "/path/to/spend-policy.json",
         "TGBP_API_KEY": "…",

@@ -6,9 +6,12 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import {
+  Client,
+  InMemoryTransport,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client'
+import { createMcpHandler } from '@modelcontextprotocol/server'
 import express from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -82,25 +85,29 @@ afterEach(async () => {
 
 type ElicitAnswer = 'approve' | 'decline' | 'never'
 
-async function connect(
-  options: { elicit?: ElicitAnswer; server?: Partial<TgbpMcpServerOptions> } = {},
-) {
-  const server = createTgbpMcpServer({
+function createServer(options: Partial<TgbpMcpServerOptions> = {}) {
+  return createTgbpMcpServer({
     policy: POLICY,
     ledgerPath: join(dir, 'ledger.jsonl'),
     api: api as unknown as TgbpClient,
     swap: swap as unknown as TgbpSwapClient,
     evm: evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
     now: () => new Date('2026-10-21T12:00:00Z'),
-    ...options.server,
+    ...options,
   })
+}
+
+async function connect(
+  options: { elicit?: ElicitAnswer; server?: Partial<TgbpMcpServerOptions> } = {},
+) {
+  const server = createServer(options.server)
   const client = new Client(
     { name: 'test', version: '0' },
     { capabilities: options.elicit ? { elicitation: {} } : {} },
   )
   const answer = options.elicit
   if (answer) {
-    client.setRequestHandler(ElicitRequestSchema, async () => {
+    client.setRequestHandler('elicitation/create', async () => {
       if (answer === 'never') return new Promise(() => {})
       return answer === 'approve'
         ? { action: 'accept', content: { approve: true } }
@@ -109,6 +116,22 @@ async function connect(
   }
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
   await Promise.all([server.connect(serverSide), client.connect(clientSide)])
+  clients.push(client)
+  return client
+}
+
+/** A client pinned to protocol 2026-07-28, served over in-process HTTP as a remote host would serve it. */
+async function connectModern() {
+  const handler = createMcpHandler(() => createServer())
+  const client = new Client(
+    { name: 'test', version: '0' },
+    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+  )
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
+      fetch: (url, init) => handler.fetch(new Request(url, init)),
+    }),
+  )
   clients.push(client)
   return client
 }
@@ -135,6 +158,36 @@ describe('tgbp MCP server', () => {
       'tgbp_balance',
       'tgbp_mint',
       'tgbp_policy',
+      'tgbp_redeem',
+      'tgbp_swap',
+      'tgbp_transfer',
+      'tgbp_x402_pay',
+    ])
+  })
+
+  it('serves a client on protocol 2026-07-28 every tool', async () => {
+    const client = await connectModern()
+    expect(client.getProtocolEra()).toBe('modern')
+    const { tools } = await client.listTools()
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'tgbp_balance',
+      'tgbp_mint',
+      'tgbp_policy',
+      'tgbp_redeem',
+      'tgbp_swap',
+      'tgbp_transfer',
+      'tgbp_x402_pay',
+    ])
+  })
+
+  it('makes the client ask the human on every call to a tool that moves value', async () => {
+    const { tools } = await (await connect()).listTools()
+    const marked = tools
+      .filter((t) => t._meta?.['anthropic/requiresUserInteraction'] === true)
+      .map((t) => t.name)
+      .sort()
+    expect(marked).toEqual([
+      'tgbp_mint',
       'tgbp_redeem',
       'tgbp_swap',
       'tgbp_transfer',
@@ -215,6 +268,13 @@ describe('redemption over the approval threshold', () => {
 
   it('is refused before any signing or API call when the client cannot ask a human', async () => {
     const { body } = await call(await connect(), 'tgbp_redeem', redeem)
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details.rule).toBe('redemptionApprovalAbove')
+    expectNothingSent()
+  })
+
+  it('is refused before any signing or API call on a 2026-07-28 connection', async () => {
+    const { body } = await call(await connectModern(), 'tgbp_redeem', redeem)
     expect(body.code).toBe('SPEND_POLICY_DENIED')
     expect(body.details.rule).toBe('redemptionApprovalAbove')
     expectNothingSent()

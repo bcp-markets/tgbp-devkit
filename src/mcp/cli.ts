@@ -13,7 +13,7 @@
  *
  * stdout carries the protocol, so everything else goes to stderr.
  */
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import { createPublicClient, createWalletClient, defineChain, type Hex, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
@@ -54,7 +54,8 @@ async function main(): Promise<void> {
       : {}),
     ...(env.TGBP_EVM_PRIVATE_KEY ? { evm: evmClients(env.TGBP_EVM_PRIVATE_KEY as Hex) } : {}),
   })
-  await server.connect(new StdioServerTransport())
+  // serveStdio answers both a 2025-era initialize and a 2026-07-28 opening with this one server.
+  serveStdio(() => server)
   console.error(`tgbp-mcp: serving, spend policy ${policyPath} expires ${policy.expiresAt}`)
 }
 

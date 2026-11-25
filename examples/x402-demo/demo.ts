@@ -23,9 +23,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { HTTPFacilitatorClient } from '@x402/core/server'
 import {
   createPublicClient,
@@ -204,7 +202,7 @@ async function payFor(url: string, policy: SpendPolicy, ledgerPath: string): Pro
     { name: 'x402-demo', version: '0' },
     { capabilities: { elicitation: {} } },
   )
-  client.setRequestHandler(ElicitRequestSchema, async () => ({
+  client.setRequestHandler('elicitation/create', async () => ({
     action: 'accept',
     content: { approve: await approveFirstPayment() },
   }))
