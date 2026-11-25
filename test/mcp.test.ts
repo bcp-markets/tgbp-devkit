@@ -15,11 +15,18 @@ import { createMcpHandler } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import express from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 import type { SpendPolicy } from '../src/agent/index.js'
 import type { TgbpClient } from '../src/api/client.js'
 import type { TgbpSwapClient } from '../src/api/swap.js'
-import { createTgbpMcpServer, type TgbpMcpServerOptions } from '../src/mcp/index.js'
+import { TgbpKitError } from '../src/errors.js'
+import {
+  createTgbpMcpServer,
+  TASKS_EXTENSION,
+  TaskStore,
+  type TgbpMcpServerOptions,
+} from '../src/mcp/index.js'
 import { TGBP_BASE_SEPOLIA, tgbpPaymentMiddleware, x402Network } from '../src/x402/server.js'
 import { fakeFacilitator, SETTLE_HASH, serve } from './x402-fakes.js'
 
@@ -44,9 +51,10 @@ const POLICY: SpendPolicy = {
 }
 
 const api = {
-  mints: { create: vi.fn() },
+  mints: { create: vi.fn(async (_body?: unknown, _opts?: unknown): Promise<unknown> => minted()) },
   redemptions: {
     create: vi.fn(async (): Promise<unknown> => created()),
+    get: vi.fn(async (): Promise<unknown> => ({ data: created().data })),
   },
 }
 function created(overrides: Record<string, unknown> = {}) {
@@ -64,6 +72,9 @@ function created(overrides: Record<string, unknown> = {}) {
     idempotencyKey: 'key_1',
   }
 }
+function minted() {
+  return { status: 'created', data: { mintId: 'mint_1', status: 'pending' }, idempotencyKey: 'k' }
+}
 const swap = { createConversion: vi.fn(async () => ({ data: {}, idempotencyKey: 'k' })) }
 const evm = vi.fn(() => ({
   publicClient: {},
@@ -75,6 +86,7 @@ let clients: Client[] = []
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  api.redemptions.create.mockImplementation(async () => created())
   dir = await mkdtemp(join(tmpdir(), 'tgbp-mcp-'))
 })
 
@@ -338,11 +350,10 @@ describe('redemption over the approval threshold', () => {
     )
     expect(isError).toBe(false)
     expect(body.burnHash).toBe('0xburn')
-    expect(api.redemptions.create).toHaveBeenCalledWith({
-      chain: 'sepolia',
-      bankId: 'bank_ok',
-      amount: { currency: 'GBP', value: 80 },
-    })
+    expect(api.redemptions.create).toHaveBeenCalledWith(
+      { chain: 'sepolia', bankId: 'bank_ok', amount: { currency: 'GBP', value: 80 } },
+      { idempotencyKey: expect.any(String) },
+    )
     expect(chain.transfer).toHaveBeenCalledWith(
       expect.objectContaining({ to: BURN, amount: 80_000_000_000_000_000_000n }),
     )
@@ -695,5 +706,356 @@ describe('tgbp_x402_pay', () => {
       arguments: { url: 'file:///etc/passwd', maxPence: 5, estimate: true },
     })
     expect(result.isError).toBe(true)
+  })
+})
+
+/**
+ * A 2026-07-28 client that declares the tasks extension. The SDK client
+ * refuses a `tools/call` answered with a task, so the test reads the raw
+ * responses the server sent.
+ */
+async function connectTasks(options: { tasks?: boolean } = {}) {
+  const store = new TaskStore()
+  const handler = createMcpHandler(() => createServer({ taskStore: store }))
+  const responses: unknown[] = []
+  const client = new Client(
+    { name: 'test', version: '0' },
+    {
+      versionNegotiation: { mode: { pin: '2026-07-28' } },
+      capabilities: {
+        elicitation: {},
+        ...(options.tasks === false ? {} : { extensions: { [TASKS_EXTENSION]: {} } }),
+      },
+    },
+  )
+  client.setRequestHandler('elicitation/create', async () => ({ action: 'decline' }))
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
+      fetch: async (url, init) => {
+        const res = await handler.fetch(new Request(url, init))
+        responses.push(...parseMessages(await res.clone().text()))
+        return res
+      },
+    }),
+  )
+  clients.push(client)
+  return { client, responses }
+}
+
+/** A response body is one JSON-RPC message, or a stream of `data:` lines. */
+function parseMessages(text: string): unknown[] {
+  if (text.trim() === '') return []
+  if (text.trimStart().startsWith('{')) return [JSON.parse(text)]
+  return text
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .filter((data) => data.startsWith('{'))
+    .map((data) => JSON.parse(data))
+}
+
+const TaskSchema = z.looseObject({
+  taskId: z.string(),
+  status: z.enum(['working', 'input_required', 'completed', 'failed', 'cancelled']),
+  result: z.looseObject({ content: z.array(z.looseObject({ text: z.string() })) }).optional(),
+  error: z.looseObject({ code: z.number(), message: z.string(), data: z.any() }).optional(),
+})
+
+/** Calls a tool that answers with a task, then polls the task until it finishes. */
+async function callTask(
+  { client, responses }: Awaited<ReturnType<typeof connectTasks>>,
+  name: string,
+  args: Record<string, unknown>,
+) {
+  await expect(client.callTool({ name, arguments: args })).rejects.toThrow()
+  const handle = responses
+    .map((message) => (message as { result?: Record<string, unknown> }).result)
+    .find((result) => result?.resultType === 'task')
+  expect(handle).toMatchObject({ status: 'working', ttlMs: expect.any(Number) })
+  const taskId = String(handle?.taskId)
+  return vi.waitFor(async () => {
+    const task = await client.request({ method: 'tasks/get', params: { taskId } }, TaskSchema)
+    if (task.status === 'working') throw new Error('still working')
+    return task
+  })
+}
+
+describe('tasks on a 2026-07-28 connection', () => {
+  const tools: [string, Record<string, unknown>, () => unknown][] = [
+    [
+      'tgbp_mint',
+      { chain: 'sepolia', destinationAddress: AGENT, amount: '10' },
+      () => api.mints.create,
+    ],
+    [
+      'tgbp_redeem',
+      { chain: 'sepolia', bankId: 'bank_ok', amount: '50' },
+      () => api.redemptions.create,
+    ],
+    [
+      'tgbp_swap',
+      { chain: 'sepolia', direction: 'TGBP_TO_USDC', amount: '10', recipient: AGENT },
+      () => swap.createConversion,
+    ],
+  ]
+
+  it.each(tools)('returns a task from %s that completes with the result', async (name, args) => {
+    api.redemptions.create.mockImplementation(async () =>
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    const task = await callTask(await connectTasks(), name, args)
+    expect(task.status).toBe('completed')
+    // The same payload a client without tasks gets on the call itself.
+    const blocking = await call(await connect(), name, args)
+    expect(JSON.parse(task.result?.content[0]?.text ?? 'null')).toEqual(blocking.body)
+  })
+
+  it('answers on the call itself when the client does not declare tasks', async () => {
+    const { client, responses } = await connectTasks({ tasks: false })
+    const { isError, body } = await call(client, 'tgbp_mint', {
+      chain: 'sepolia',
+      destinationAddress: AGENT,
+      amount: '10',
+    })
+    expect(isError).toBe(false)
+    expect(body.data.mintId).toBe('mint_1')
+    expect(JSON.stringify(responses)).not.toContain('"resultType":"task"')
+  })
+
+  it('fails a task with the API reference and the idempotency key', async () => {
+    api.mints.create.mockImplementationOnce(async (_body: unknown, opts: unknown) => {
+      const { idempotencyKey } = opts as { idempotencyKey: string }
+      throw new TgbpKitError('API_ERROR', 'POST /api/v1/mints returned 502', {
+        details: { status: 502, requestId: 'req_123', idempotencyKey },
+      })
+    })
+    const task = await callTask(await connectTasks(), 'tgbp_mint', {
+      chain: 'sepolia',
+      destinationAddress: AGENT,
+      amount: '10',
+    })
+    const [, opts] = api.mints.create.mock.calls[0] as unknown as [
+      unknown,
+      { idempotencyKey: string },
+    ]
+    expect(task.status).toBe('failed')
+    expect(task.error?.data).toMatchObject({
+      code: 'API_ERROR',
+      details: { requestId: 'req_123' },
+      idempotencyKey: opts.idempotencyKey,
+    })
+  })
+
+  it('settles approval before any task starts, and sends nothing without it', async () => {
+    const { client, responses } = await connectTasks()
+    const { body } = await call(client, 'tgbp_redeem', {
+      chain: 'sepolia',
+      bankId: 'bank_ok',
+      amount: '80',
+    })
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details.rule).toBe('redemptionApprovalAbove')
+    expect(JSON.stringify(responses)).not.toContain('"resultType":"task"')
+    expectNothingSent()
+  })
+
+  it('keeps the key until the client reads the result, then frees the inputs', async () => {
+    const args = { chain: 'sepolia', destinationAddress: AGENT, amount: '10' }
+    const keys = () =>
+      api.mints.create.mock.calls.map(
+        (c) => (c as unknown as [unknown, { idempotencyKey: string }])[1].idempotencyKey,
+      )
+    const tasks = await connectTasks()
+    await expect(tasks.client.callTool({ name: 'tgbp_mint', arguments: args })).rejects.toThrow()
+    await vi.waitFor(() => expect(api.mints.create).toHaveBeenCalledTimes(1))
+    // The result was never read: a retry resends the same key.
+    await call(await connect(), 'tgbp_mint', args)
+    expect(keys()[1]).toBe(keys()[0])
+    // Once a result is read, the same inputs are a new mint.
+    expect((await callTask(await connectTasks(), 'tgbp_mint', args)).status).toBe('completed')
+    await call(await connect(), 'tgbp_mint', args)
+    expect(keys()[3]).not.toBe(keys()[2])
+  })
+
+  it('fails a redemption task with its id when the burn fails, bigint details and all', async () => {
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    chain.transfer.mockRejectedValueOnce(
+      new TgbpKitError('INSUFFICIENT_BALANCE', 'too little', {
+        details: { balance: 1n, needed: 50n },
+      }),
+    )
+    const task = await callTask(await connectTasks(), 'tgbp_redeem', {
+      chain: 'sepolia',
+      bankId: 'bank_ok',
+      amount: '50',
+    })
+    expect(task.status).toBe('failed')
+    expect(task.error?.data).toMatchObject({
+      code: 'INSUFFICIENT_BALANCE',
+      details: { redemptionId: 'red_1', balance: '1', needed: '50' },
+      idempotencyKey: expect.any(String),
+    })
+  })
+
+  it('refuses a redeem retry by transaction when a burned task was never read', async () => {
+    const args = { chain: 'sepolia', bankId: 'bank_ok', amount: '50' }
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    const tasks = await connectTasks()
+    await expect(tasks.client.callTool({ name: 'tgbp_redeem', arguments: args })).rejects.toThrow()
+    await vi.waitFor(() => expect(chain.transfer).toHaveBeenCalledTimes(1))
+    await vi.waitFor(async () => {
+      const { body } = await call(await connect(), 'tgbp_redeem', args)
+      expect(body.message).toMatch(/red_1 .*sent in transaction 0xburn/)
+    })
+    expect(chain.transfer).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to cancel a submitted task', async () => {
+    let answer = (_value: unknown) => {}
+    api.mints.create.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+    const tasks = await connectTasks()
+    await expect(
+      tasks.client.callTool({
+        name: 'tgbp_mint',
+        arguments: { chain: 'sepolia', destinationAddress: AGENT, amount: '10' },
+      }),
+    ).rejects.toThrow()
+    const handle = tasks.responses
+      .map((message) => (message as { result?: Record<string, unknown> }).result)
+      .find((result) => result?.resultType === 'task')
+    await expect(
+      tasks.client.request(
+        { method: 'tasks/cancel', params: { taskId: String(handle?.taskId) } },
+        z.looseObject({}),
+      ),
+    ).rejects.toThrow(/cannot be cancelled/)
+    answer(minted())
+  })
+})
+
+describe('a retry after the server dies mid-call', () => {
+  /** Starts a call whose upstream request never answers, then closes the connection. */
+  async function dieDuring(name: string, args: Record<string, unknown>, upstream: () => void) {
+    const client = await connect({ elicit: 'approve' })
+    const pending = client.callTool({ name, arguments: args }).catch(() => undefined)
+    await vi.waitFor(upstream)
+    await client.close()
+    await pending
+  }
+
+  it.each([
+    [
+      'tgbp_mint',
+      { chain: 'sepolia', destinationAddress: AGENT, amount: '10' },
+      api.mints.create,
+      minted,
+    ],
+    [
+      'tgbp_swap',
+      { chain: 'sepolia', direction: 'TGBP_TO_USDC', amount: '10', recipient: AGENT },
+      swap.createConversion,
+      () => ({ data: {}, idempotencyKey: 'k' }),
+    ],
+    [
+      'tgbp_redeem',
+      { chain: 'sepolia', bankId: 'bank_ok', amount: '50' },
+      api.redemptions.create,
+      () => created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    ],
+  ] as const)(
+    'resends the saved key for %s, so the API submits it once',
+    async (name, args, create, answer) => {
+      // The API: a key it has seen returns the first record instead of a second.
+      const submitted = new Set<string>()
+      const mock = create as unknown as ReturnType<typeof vi.fn>
+      mock
+        .mockImplementationOnce(async (_body: unknown, opts: { idempotencyKey: string }) => {
+          submitted.add(opts.idempotencyKey)
+          return new Promise(() => {})
+        })
+        .mockImplementationOnce(async (_body: unknown, opts: { idempotencyKey: string }) => {
+          submitted.add(opts.idempotencyKey)
+          return answer()
+        })
+      await dieDuring(name, args, () => expect(mock).toHaveBeenCalledTimes(1))
+
+      const { isError } = await call(await connect({ elicit: 'approve' }), name, args)
+      expect(isError).toBe(false)
+      const keys = mock.mock.calls.map(
+        ([, opts]) => (opts as { idempotencyKey: string }).idempotencyKey,
+      )
+      expect(keys).toHaveLength(2)
+      expect(keys[1]).toBe(keys[0])
+      expect(submitted.size).toBe(1)
+    },
+  )
+
+  it('never burns a second time when it died during the burn', async () => {
+    const redeem = { chain: 'sepolia', bankId: 'bank_ok', amount: '50' }
+    api.redemptions.create.mockResolvedValueOnce(
+      created({ amount: { amount: '50.00', currency: 'GBP' } }),
+    )
+    chain.transfer.mockReturnValueOnce(new Promise(() => {}))
+    await dieDuring('tgbp_redeem', redeem, () => expect(chain.transfer).toHaveBeenCalledTimes(1))
+
+    const { isError, body } = await call(await connect(), 'tgbp_redeem', redeem)
+    expect(isError).toBe(true)
+    expect(body.message).toMatch(/red_1 .*may have been sent/)
+    expect(chain.transfer).toHaveBeenCalledTimes(1)
+    expect(api.redemptions.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('burns nothing for a replayed redemption that is no longer pending', async () => {
+    api.redemptions.create.mockResolvedValueOnce({
+      ...created({ amount: { amount: '50.00', currency: 'GBP' } }),
+      status: 'replayed',
+    })
+    api.redemptions.get.mockResolvedValueOnce({
+      data: created({ amount: { amount: '50.00', currency: 'GBP' }, status: 'cancelled' }).data,
+    })
+    const { isError, body } = await call(await connect(), 'tgbp_redeem', {
+      chain: 'sepolia',
+      bankId: 'bank_ok',
+      amount: '50',
+    })
+    expect(isError).toBe(true)
+    expect(body.message).toContain('(status cancelled)')
+    expect(api.redemptions.get).toHaveBeenCalledWith('red_1')
+    expect(chain.transfer).not.toHaveBeenCalled()
+  })
+
+  it('resends the same key after the API refused the first request', async () => {
+    api.mints.create.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/v1/mints returned 422', {
+        details: { status: 422, requestId: 'req_1' },
+      }),
+    )
+    const args = { chain: 'sepolia', destinationAddress: AGENT, amount: '10' }
+    const client = await connect()
+    expect((await call(client, 'tgbp_mint', args)).isError).toBe(true)
+    expect((await call(client, 'tgbp_mint', args)).isError).toBe(false)
+    const keys = api.mints.create.mock.calls.map(
+      (callArgs) =>
+        (callArgs as unknown as [unknown, { idempotencyKey: string }])[1].idempotencyKey,
+    )
+    // A 4xx can follow an earlier attempt that created the record, so the key is kept.
+    expect(keys).toHaveLength(2)
+    expect(new Set(keys).size).toBe(1)
+  })
+
+  it('starts a new submission with a new key once the first one answered', async () => {
+    const args = { chain: 'sepolia', destinationAddress: AGENT, amount: '10' }
+    const client = await connect()
+    await call(client, 'tgbp_mint', args)
+    await call(client, 'tgbp_mint', args)
+    const keys = api.mints.create.mock.calls.map(
+      (callArgs) =>
+        (callArgs as unknown as [unknown, { idempotencyKey: string }])[1].idempotencyKey,
+    )
+    expect(new Set(keys).size).toBe(2)
   })
 })

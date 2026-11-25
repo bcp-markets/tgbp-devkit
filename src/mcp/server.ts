@@ -8,12 +8,14 @@
 import {
   type CallToolResult,
   McpServer,
+  ProtocolErrorCode,
   SdkError,
   SdkErrorCode,
+  type ServerContext,
 } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
-import { type AgentActionsOptions, createAgentActions } from '../agent/actions.js'
+import { type AgentActionsOptions, createAgentActions, type Prepared } from '../agent/actions.js'
 import {
   type Approver,
   createSpendGuard,
@@ -21,20 +23,38 @@ import {
   MAX_REASON_LENGTH,
 } from '../agent/guard.js'
 import type { SpendPolicy } from '../agent/policy.js'
+import { SubmissionJournal } from '../agent/submissions.js'
 import { formatAmount } from '../amount.js'
 import { readCapped } from '../body.js'
 import { isTgbpKitError } from '../errors.js'
 import { KIT_VERSION } from '../version.js'
+import {
+  acceptsTask,
+  registerTaskHandlers,
+  TASKS_EXTENSION,
+  TaskStore,
+  taskResult,
+} from './tasks.js'
 
 type X402Client = typeof import('../x402/client.js')
 type PaymentFetch = ReturnType<X402Client['createTgbpPaymentFetch']>
 
-export interface TgbpMcpServerOptions extends Omit<AgentActionsOptions, 'guard'> {
+export interface TgbpMcpServerOptions extends Omit<AgentActionsOptions, 'guard' | 'submissions'> {
   policy: SpendPolicy
   /** The append-only spend ledger for this policy. */
   ledgerPath: string
+  /**
+   * Where each mint, redemption and swap's idempotency key is saved before it
+   * is sent, so a retry after a crash resends it. Default `<ledgerPath>.submissions.jsonl`.
+   */
+  submissionsPath?: string
   /** How long to wait for a human to approve a redemption. Default 5 minutes. */
   approvalTimeoutMs?: number
+  /**
+   * Where mint, redeem and swap tasks are kept. A host that builds a server per
+   * request passes one store to all of them; by default each server has its own.
+   */
+  taskStore?: TaskStore
   /** Clock, for tests. */
   now?: () => Date
 }
@@ -75,7 +95,12 @@ const CANNOT_ASK_ON_THIS_CONNECTION =
  * but two servers built from the same options do not queue behind each other.
  */
 export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
-  const server = new McpServer({ name: 'tgbp', version: KIT_VERSION })
+  const server = new McpServer(
+    { name: 'tgbp', version: KIT_VERSION },
+    { capabilities: { extensions: { [TASKS_EXTENSION]: {} } } },
+  )
+  const taskStore = options.taskStore ?? new TaskStore(options.now)
+  registerTaskHandlers(server, taskStore)
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
 
   const approver: Approver = async (request, signal) => {
@@ -133,7 +158,44 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     approvalTimeoutMs,
     ...(options.now ? { now: options.now } : {}),
   })
-  const actions = createAgentActions({ ...options, guard })
+  const submissions = new SubmissionJournal(
+    options.submissionsPath ?? `${options.ledgerPath}.submissions.jsonl`,
+    options.now,
+  )
+  const actions = createAgentActions({ ...options, guard, submissions })
+
+  /**
+   * Authorises the action and saves its key, asking the human first if the
+   * policy needs it, then submits it. A client that declares the tasks
+   * extension gets a task handle once the action is authorised; a refusal is
+   * answered on the call and never becomes a task.
+   */
+  async function submit<T>(
+    ctx: ServerContext,
+    prepare: () => Promise<Prepared<T>>,
+  ): Promise<CallToolResult> {
+    let prepared: Prepared<T>
+    try {
+      prepared = await prepare()
+    } catch (error) {
+      return failure(error)
+    }
+    if (!acceptsTask(ctx.mcpReq.envelope)) return run(() => prepared.submit())
+    const task = taskStore.start(
+      // Held open until the client reads the result, so a retry before then resends the key.
+      async () => ok(await prepared.submit({ holdOpen: true })),
+      (error) => ({
+        code: ProtocolErrorCode.InternalError,
+        message: plainMessage(error),
+        // Through the same encoder as a tool result: error details can hold bigints.
+        data: JSON.parse(
+          toJson({ ...errorBody(error), idempotencyKey: prepared.idempotencyKey }),
+        ) as Record<string, unknown>,
+      }),
+      () => prepared.release(),
+    )
+    return taskResult(task)
+  }
 
   server.registerTool(
     'tgbp_policy',
@@ -189,7 +251,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       annotations: { destructiveHint: true, openWorldHint: true },
       _meta: REQUIRES_USER_INTERACTION,
     },
-    (args) => run(() => actions.mint(args)),
+    (args, ctx) => submit(ctx, () => actions.prepare.mint(args)),
   )
 
   server.registerTool(
@@ -207,7 +269,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       annotations: { destructiveHint: true, openWorldHint: true },
       _meta: REQUIRES_USER_INTERACTION,
     },
-    (args) => run(() => actions.redeem(args)),
+    (args, ctx) => submit(ctx, () => actions.prepare.redeem(args)),
   )
 
   server.registerTool(
@@ -227,7 +289,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       annotations: { destructiveHint: true, openWorldHint: true },
       _meta: REQUIRES_USER_INTERACTION,
     },
-    (args) => run(() => actions.swap(args)),
+    (args, ctx) => submit(ctx, () => actions.prepare.swap(args)),
   )
 
   // One payment fetch for the server: it pays one payment at a time, because
@@ -368,7 +430,12 @@ function ok(value: unknown): CallToolResult {
 
 /** A refusal is a tool result, not a protocol error, so the agent reads the rule. */
 function failure(error: unknown): CallToolResult {
-  const body = isTgbpKitError(error)
+  return { isError: true, content: [{ type: 'text', text: toJson(errorBody(error)) }] }
+}
+
+/** What the agent reads about a failure: the kit's code and details, or the message alone. */
+function errorBody(error: unknown): Record<string, unknown> {
+  return isTgbpKitError(error)
     ? {
         code: error.code,
         message: error.message,
@@ -376,7 +443,6 @@ function failure(error: unknown): CallToolResult {
         ...(error.cause === undefined ? {} : { cause: plainMessage(error.cause) }),
       }
     : { message: plainMessage(error) }
-  return { isError: true, content: [{ type: 'text', text: toJson(body) }] }
 }
 
 /** A `Response` in the details serialises as `{}`; the agent needs its status. */
