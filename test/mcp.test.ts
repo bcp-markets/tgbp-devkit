@@ -581,6 +581,19 @@ describe('swap intents', () => {
     expect(new Set(intentIds()).size).toBe(2)
   })
 
+  it('never cancels a resumed intent, whose deposit may be on the way', async () => {
+    swap.createConversion.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      }),
+    )
+    const client = await connect()
+    await call(client, 'tgbp_swap', args)
+    const { body } = await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(body.message).toContain('do not fund it: an earlier call may have asked for its deposit')
+    expect(swap.cancelSwapIntent).not.toHaveBeenCalled()
+  })
+
   it('converts an intent whose firm quote pays at least minOut', async () => {
     const { isError } = await call(await connect(), 'tgbp_swap', { ...args, minOut: '12.5' })
     expect(isError).toBe(false)

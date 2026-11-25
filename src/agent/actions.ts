@@ -468,6 +468,8 @@ export function createAgentActions(options: AgentActionsOptions) {
       // The API ignores minOut: the intent's firm quote is binding, so it is checked here.
       if (minOut !== undefined && intent.status === 'active') {
         await assertPaysAtLeast(intent, minOut, targetDecimals, async () => {
+          // Its deposit may already be on the way; withdrawing it now would send that back.
+          if (resumed) throw new Error('an earlier call may have asked for its deposit')
           const { data: cancelled } = await swap.cancelSwapIntent(intentId)
           // The swap API answers a cancel with withdrawn. Any other status may still fill or have
           // converted, so the key stays open.
