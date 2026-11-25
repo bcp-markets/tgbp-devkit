@@ -121,12 +121,21 @@ async function connect(
 }
 
 /** A client pinned to protocol 2026-07-28, served over in-process HTTP as a remote host would serve it. */
-async function connectModern() {
+async function connectModern(options: { elicit?: boolean } = {}) {
   const handler = createMcpHandler(() => createServer())
   const client = new Client(
     { name: 'test', version: '0' },
-    { versionNegotiation: { mode: { pin: '2026-07-28' } } },
+    {
+      versionNegotiation: { mode: { pin: '2026-07-28' } },
+      capabilities: options.elicit ? { elicitation: {} } : {},
+    },
   )
+  if (options.elicit) {
+    client.setRequestHandler('elicitation/create', async () => ({
+      action: 'accept',
+      content: { approve: true },
+    }))
+  }
   await client.connect(
     new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
       fetch: (url, init) => handler.fetch(new Request(url, init)),
@@ -273,12 +282,19 @@ describe('redemption over the approval threshold', () => {
     expectNothingSent()
   })
 
-  it('is refused before any signing or API call on a 2026-07-28 connection', async () => {
-    const { body } = await call(await connectModern(), 'tgbp_redeem', redeem)
-    expect(body.code).toBe('SPEND_POLICY_DENIED')
-    expect(body.details.rule).toBe('redemptionApprovalAbove')
-    expectNothingSent()
-  })
+  it.each([
+    ['cannot ask', false],
+    ['can ask', true],
+  ])(
+    'is refused before any signing or API call on a 2026-07-28 connection whose client %s',
+    async (_, elicit) => {
+      const { body } = await call(await connectModern({ elicit }), 'tgbp_redeem', redeem)
+      expect(body.code).toBe('SPEND_POLICY_DENIED')
+      expect(body.details.rule).toBe('redemptionApprovalAbove')
+      if (elicit) expect(body.details.approverError).toMatch(/only on a 2025-era MCP connection/)
+      expectNothingSent()
+    },
+  )
 
   it('is refused when the human declines', async () => {
     const { body } = await call(await connect({ elicit: 'decline' }), 'tgbp_redeem', redeem)
