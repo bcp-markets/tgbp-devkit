@@ -36,7 +36,7 @@ export interface LedgerEntry {
 
 export type ReserveResult<R> = { ok: true } | { ok: false; refusal: R }
 
-const LOCK_WAIT_MS = 5_000
+export const LOCK_WAIT_MS = 5_000
 const LOCK_RETRY_MS = 25
 
 export class SpendLedger {
@@ -65,20 +65,10 @@ export class SpendLedger {
     entry: LedgerEntry,
     refuse: (entries: LedgerEntry[]) => R | undefined,
   ): Promise<ReserveResult<R>> {
-    return this.withLock(async () => {
+    return withFileLock(this.path, 'ledger', this.lockWaitMs, async () => {
       const refusal = refuse(await this.entries())
       if (refusal !== undefined) return { ok: false, refusal }
-      const handle = await open(this.path, 'a', 0o600)
-      let created: boolean
-      try {
-        created = (await handle.stat()).size === 0
-        await handle.write(`${JSON.stringify(entry)}\n`)
-        await handle.sync()
-      } finally {
-        await handle.close()
-      }
-      // A new file is durable only once its directory entry is, too.
-      if (created) await syncDirectory(dirname(this.path))
+      await appendSynced(this.path, `${JSON.stringify(entry)}\n`)
       return { ok: true }
     })
   }
@@ -98,38 +88,59 @@ export class SpendLedger {
       .filter((line) => line.trim() !== '')
       .map((line, index) => parseEntry(line, index + 1, this.path))
   }
+}
 
-  /**
-   * Only the holder ever removes the lock. A lock left by a process that died
-   * is never broken automatically, because a slow holder looks the same; the
-   * ledger refuses until someone who knows the process is gone deletes it.
-   */
-  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const lockPath = `${this.path}.lock`
-    const deadline = Date.now() + this.lockWaitMs
-    for (;;) {
-      try {
-        const handle = await open(lockPath, 'wx', 0o600)
-        await handle.close()
-        break
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        if (Date.now() > deadline) {
-          throw new Error(
-            `The ledger lock ${lockPath} is held. If no tgbp process is running, delete it.`,
-          )
-        }
-        await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
-      }
-    }
+/**
+ * Runs `fn` holding `<path>.lock`. Only the holder ever removes the lock. A
+ * lock left by a process that died is never broken automatically, because a
+ * slow holder looks the same; `what` refuses until someone who knows the
+ * process is gone deletes it.
+ */
+export async function withFileLock<T>(
+  path: string,
+  what: string,
+  lockWaitMs: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lockPath = `${path}.lock`
+  const deadline = Date.now() + lockWaitMs
+  for (;;) {
     try {
-      return await fn()
-    } finally {
-      // Never let the release hide fn's own result or error. A lock that
-      // could not be removed makes the next action refuse, which surfaces it.
-      await unlink(lockPath).catch(() => {})
+      const handle = await open(lockPath, 'wx', 0o600)
+      await handle.close()
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (Date.now() > deadline) {
+        throw new Error(
+          `The ${what} lock ${lockPath} is held. If no tgbp process is running, delete it.`,
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS))
     }
   }
+  try {
+    return await fn()
+  } finally {
+    // Never let the release hide fn's own result or error. A lock that
+    // could not be removed makes the next action refuse, which surfaces it.
+    await unlink(lockPath).catch(() => {})
+  }
+}
+
+/** Appends `line` and syncs it to disk, so a crash after this resolves cannot lose it. */
+export async function appendSynced(path: string, line: string): Promise<void> {
+  const handle = await open(path, 'a', 0o600)
+  let created: boolean
+  try {
+    created = (await handle.stat()).size === 0
+    await handle.write(line)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  // A new file is durable only once its directory entry is, too.
+  if (created) await syncDirectory(dirname(path))
 }
 
 async function syncDirectory(path: string): Promise<void> {

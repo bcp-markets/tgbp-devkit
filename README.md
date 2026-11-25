@@ -297,7 +297,7 @@ approved payment `"firstPayment": true`.
 | Variable | Use |
 |---|---|
 | `TGBP_POLICY_FILE` | The spend policy. Required. |
-| `TGBP_LEDGER_FILE` | The spend ledger. Default `<policy file>.ledger.jsonl`. |
+| `TGBP_LEDGER_FILE` | The spend ledger. Default `<policy file>.ledger.jsonl`. The submission journal sits beside it. |
 | `TGBP_API_KEY` | Enables mint, redeem and swap. |
 | `TGBP_ENVIRONMENT` | `sandbox` (default) or `production`. |
 | `TGBP_SWAP_BASE_URL` | The swap host. Production uses its own; the sandbox needs this set to swap. |
@@ -312,6 +312,25 @@ is `pending` and matches the chain, amount and bank account asked for.
 `tgbp_swap` converts a deposit the
 swap API has already confirmed. `tgbp_mint` and `tgbp_swap` take an optional `idempotencyKey`:
 after an ambiguous failure, retry with the key from the error to get the first record back.
+
+**Tasks.** On a 2026-07-28 connection whose client declares the MCP tasks extension
+(`io.modelcontextprotocol/tasks`), `tgbp_mint`, `tgbp_redeem` and `tgbp_swap` return a task handle
+as soon as the spend policy allows the action. The client polls `tasks/get` until the task is
+`completed`, with the same result the tool returns without tasks, or `failed`. A failed task's
+`error.data` carries the kit's error code, the API's `requestId` when the API answered, and the
+`idempotencyKey` that was sent. Any approval the policy needs is settled before the task starts,
+so a refusal comes back on the call and never as a task. A submitted task cannot be cancelled. Other
+clients get the result on the call itself.
+
+**Tasks end with the client.** `tgbp-mcp` runs over stdio and keeps tasks in memory, so its tasks
+end when the client exits or the server stops. A retry with the same inputs is still safe. Before
+it sends a mint, redemption or swap, the server saves the request's idempotency key to the
+submission journal, `<ledger file>.submissions.jsonl`, keyed by the request's inputs. A retry with
+the same inputs resends that key, and the API returns the first record instead of creating a second.
+Once an answer arrives, the same inputs count as a new request with a new key. A saved key is reused
+for 24 hours, as long as the API keeps it. If the server stopped while a redemption's burn was being
+sent, a retry is refused, because a second burn would destroy the tGBP twice: check the burn address
+on chain first.
 
 `tgbp_x402_pay` takes `url`, `maxPence`, `reason` and an optional `estimate`. It sends a GET to
 the URL and pays its x402 price in tGBP on Base Sepolia from the agent's wallet, through the

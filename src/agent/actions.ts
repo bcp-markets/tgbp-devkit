@@ -5,7 +5,7 @@
  *
  * On-chain actions run on EVM chains.
  */
-import { isAddress, type PublicClient, type WalletClient } from 'viem'
+import { type Hex, isAddress, type PublicClient, type WalletClient } from 'viem'
 
 import { formatAmount, parseAmount } from '../amount.js'
 import type { CreateResult, Mint, Redemption, TgbpClient } from '../api/client.js'
@@ -14,6 +14,7 @@ import { isTgbpKitError, TgbpKitError } from '../errors.js'
 import { getBalance, transfer } from '../evm/index.js'
 import { type EvmTokenDeployment, getEvmToken, getToken } from '../registry/index.js'
 import type { SpendGuard } from './guard.js'
+import type { SubmissionJournal, SubmissionTool } from './submissions.js'
 
 export interface EvmClients {
   publicClient: PublicClient
@@ -29,6 +30,46 @@ export interface AgentActionsOptions {
   swap?: TgbpSwapClient
   /** Returns the clients for a chain. Needed for balance, transfer and redeem. */
   evm?: (token: EvmTokenDeployment) => EvmClients
+  /**
+   * Saves each mint, redemption and swap's idempotency key before it is sent,
+   * so a retry after a crash resends the same key and the API dedupes it.
+   */
+  submissions?: SubmissionJournal
+}
+
+export interface MintParams {
+  chain: string
+  destinationAddress: string
+  amount: string
+  customerId?: string
+  idempotencyKey?: string
+}
+
+export interface RedeemParams {
+  chain: string
+  bankId: string
+  amount: string
+  reference?: string
+}
+
+export interface SwapParams {
+  chain: string
+  direction: SwapDirection
+  amount: string
+  recipient: string
+  minOut?: string
+  idempotencyKey?: string
+}
+
+export type RedeemResult =
+  | { redemption: CreateResult<Redemption>; burned: false }
+  | { redemption: CreateResult<Redemption>; burned: true; burnHash: Hex }
+
+/** An authorised action whose key is saved and which has sent nothing yet. */
+export interface Prepared<T> {
+  /** The key `submit` sends; undefined when there is no journal and no key was passed. */
+  idempotencyKey: string | undefined
+  submit(): Promise<T>
 }
 
 export type SwapDirection = 'USDC_TO_TGBP' | 'TGBP_TO_USDC'
@@ -40,7 +81,7 @@ const USDC_DECIMALS = 6
 const SWAP_CHAINS = ['base', 'sepolia'] as const
 
 export function createAgentActions(options: AgentActionsOptions) {
-  const { guard } = options
+  const { guard, submissions } = options
 
   function evmClients(token: EvmTokenDeployment): EvmClients {
     if (!options.evm) throw new Error('No EVM wallet is configured')
@@ -90,32 +131,7 @@ export function createAgentActions(options: AgentActionsOptions) {
      * arrives. Pass back the `idempotencyKey` of an earlier attempt to retry it
      * without creating a second mint.
      */
-    async mint(params: {
-      chain: string
-      destinationAddress: string
-      amount: string
-      customerId?: string
-      idempotencyKey?: string
-    }): Promise<CreateResult<Mint>> {
-      const api = requireApi()
-      const token = getToken(params.chain)
-      const { amount, value } = gbp(params.amount)
-      await guard.authorize({
-        action: 'mint',
-        chain: token.chain,
-        destination: params.destinationAddress,
-        amount,
-      })
-      return api.mints.create(
-        {
-          chain: token.chain,
-          destinationAddress: params.destinationAddress,
-          amount: { currency: 'GBP', value },
-          ...(params.customerId ? { customerId: params.customerId } : {}),
-        },
-        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {},
-      )
-    },
+    mint: async (params: MintParams) => (await prepareMint(params)).submit(),
 
     /**
      * Create a redemption, then burn the tGBP by sending it to the
@@ -123,94 +139,204 @@ export function createAgentActions(options: AgentActionsOptions) {
      * confirms. Nothing is burned unless the API's redemption matches the
      * request: its chain, amount and bank account.
      */
-    async redeem(params: { chain: string; bankId: string; amount: string; reference?: string }) {
-      const api = requireApi()
-      const token = getEvmToken(params.chain)
-      const { amount, value } = gbp(params.amount)
-      const baseUnits = parseAmount(amount, token.decimals)
-      const clients = evmClients(token)
-      await guard.authorize({
-        action: 'redeem',
-        chain: token.chain,
-        destination: params.bankId,
-        amount,
-      })
-      const created = await api.redemptions.create({
-        chain: token.chain,
-        bankId: params.bankId,
-        amount: { currency: 'GBP', value },
-        ...(params.reference ? { reference: params.reference } : {}),
-      })
-      // A second approver must act first; nothing is burned, and the spend stays counted.
-      if (created.status === 'pending_approval') return { redemption: created, burned: false }
-      const redemption: Redemption = created.data
-      assertRedemptionMatches(redemption, token, params.bankId, amount)
-      try {
-        const { hash } = await transfer({
-          ...clients,
-          chain: token,
-          to: redemption.burnAddress,
-          amount: baseUnits,
-        })
-        return { redemption: created, burned: true, burnHash: hash }
-      } catch (error) {
-        throw burnFailed(error, redemption.redemptionId)
-      }
-    },
+    redeem: async (params: RedeemParams) => (await prepareRedeem(params)).submit(),
 
     /**
      * Convert a confirmed swap deposit and settle it to `recipient`. `amount`
      * is the source amount: tGBP for TGBP_TO_USDC, USDC for USDC_TO_TGBP.
      * Pass back the `idempotencyKey` of an earlier attempt to retry it.
      */
-    async swap(params: {
-      chain: string
-      direction: SwapDirection
-      amount: string
-      recipient: string
-      minOut?: string
-      idempotencyKey?: string
-    }): Promise<{ data: Conversion; idempotencyKey: string }> {
-      if (!options.swap)
-        throw new Error('No swap API is configured; set TGBP_API_KEY and TGBP_SWAP_BASE_URL')
-      const chain = getEvmToken(params.chain).chain
-      const swapChain = SWAP_CHAINS.find((c) => c === chain)
-      if (!swapChain) {
-        throw new TgbpKitError('UNKNOWN_CHAIN', `The swap API does not serve "${chain}"`, {
-          details: { chain, supported: SWAP_CHAINS },
-        })
-      }
-      if (!isAddress(params.recipient)) {
-        throw new TgbpKitError(
-          'WRONG_CHAIN_ADDRESS',
-          `"${params.recipient}" is not an EVM address`,
+    swap: async (params: SwapParams) => (await prepareSwap(params)).submit(),
+
+    /**
+     * The same actions in two steps. Each validates, asks the spend guard and
+     * saves its idempotency key, then returns; nothing is sent until `submit`.
+     * An approval the guard needs is therefore settled before anything is sent.
+     */
+    prepare: { mint: prepareMint, redeem: prepareRedeem, swap: prepareSwap },
+  }
+
+  /** The key to send: saved to the journal first, if there is one. */
+  async function openSubmission(
+    tool: SubmissionTool,
+    inputs: Record<string, unknown>,
+    idempotencyKey: string | undefined,
+  ): Promise<string | undefined> {
+    if (!submissions) return idempotencyKey
+    return (await submissions.open(tool, inputs, idempotencyKey)).idempotencyKey
+  }
+
+  async function closeSubmission(
+    tool: SubmissionTool,
+    inputs: Record<string, unknown>,
+    idempotencyKey: string | undefined,
+  ): Promise<void> {
+    if (submissions && idempotencyKey) await submissions.close(tool, inputs, idempotencyKey)
+  }
+
+  /** A key goes in the create options; without one the API client generates its own. */
+  function keyOptions(idempotencyKey: string | undefined): { idempotencyKey?: string } {
+    return idempotencyKey ? { idempotencyKey } : {}
+  }
+
+  async function prepareMint(params: MintParams): Promise<Prepared<CreateResult<Mint>>> {
+    const api = requireApi()
+    const token = getToken(params.chain)
+    const { amount, value } = gbp(params.amount)
+    await guard.authorize({
+      action: 'mint',
+      chain: token.chain,
+      destination: params.destinationAddress,
+      amount,
+    })
+    const inputs = {
+      chain: token.chain,
+      destinationAddress: params.destinationAddress,
+      amount,
+      customerId: params.customerId || undefined,
+    }
+    const idempotencyKey = await openSubmission('mint', inputs, params.idempotencyKey)
+    return {
+      idempotencyKey,
+      async submit() {
+        const result = await api.mints.create(
           {
-            details: { chain, address: params.recipient },
+            chain: token.chain,
+            destinationAddress: params.destinationAddress,
+            amount: { currency: 'GBP', value },
+            ...(params.customerId ? { customerId: params.customerId } : {}),
           },
+          keyOptions(idempotencyKey),
         )
-      }
-      const decimals = params.direction === 'USDC_TO_TGBP' ? USDC_DECIMALS : 18
-      const amount = formatAmount(parseAmount(params.amount, decimals), decimals)
-      // Caps are in pounds. A USDC amount counts as the same number of pounds,
-      // which overstates it while a dollar is worth less than a pound.
-      await guard.authorize({
-        action: 'swap',
-        chain,
-        destination: params.recipient,
-        amount,
+        await closeSubmission('mint', inputs, idempotencyKey)
+        return result
+      },
+    }
+  }
+
+  async function prepareRedeem(params: RedeemParams): Promise<Prepared<RedeemResult>> {
+    const api = requireApi()
+    const token = getEvmToken(params.chain)
+    const { amount, value } = gbp(params.amount)
+    const baseUnits = parseAmount(amount, token.decimals)
+    const clients = evmClients(token)
+    await guard.authorize({
+      action: 'redeem',
+      chain: token.chain,
+      destination: params.bankId,
+      amount,
+    })
+    const inputs = {
+      chain: token.chain,
+      bankId: params.bankId,
+      amount,
+      reference: params.reference || undefined,
+    }
+    const idempotencyKey = await openSubmission('redeem', inputs, undefined)
+    const body = {
+      chain: token.chain,
+      bankId: params.bankId,
+      amount: { currency: 'GBP' as const, value },
+      ...(params.reference ? { reference: params.reference } : {}),
+    }
+    return {
+      idempotencyKey,
+      async submit() {
+        const created = idempotencyKey
+          ? await api.redemptions.create(body, { idempotencyKey })
+          : await api.redemptions.create(body)
+        // A second approver must act first; nothing is burned, and the spend stays counted.
+        if (created.status === 'pending_approval') {
+          await closeSubmission('redeem', inputs, idempotencyKey)
+          return { redemption: created, burned: false }
+        }
+        const redemption: Redemption = created.data
+        try {
+          assertRedemptionMatches(redemption, token, params.bankId, amount)
+        } catch (error) {
+          // The API's answer is final; a retry would only replay it.
+          await closeSubmission('redeem', inputs, idempotencyKey)
+          throw error
+        }
+        // Recorded before the burn is sent, so a retry after a crash never burns a second time.
+        if (submissions && idempotencyKey) {
+          await submissions.burning(inputs, idempotencyKey, redemption.redemptionId)
+        }
+        let hash: Hex
+        try {
+          ;({ hash } = await transfer({
+            ...clients,
+            chain: token,
+            to: redemption.burnAddress,
+            amount: baseUnits,
+          }))
+        } catch (error) {
+          const failed = burnFailed(error, redemption.redemptionId, idempotencyKey)
+          // Only a burn known to have moved nothing may be retried; any other stays recorded as sent.
+          if (isTgbpKitError(error) && NOT_BURNED.has(error.code)) {
+            await closeSubmission('redeem', inputs, idempotencyKey)
+          }
+          throw failed
+        }
+        await closeSubmission('redeem', inputs, idempotencyKey)
+        return { redemption: created, burned: true, burnHash: hash }
+      },
+    }
+  }
+
+  async function prepareSwap(
+    params: SwapParams,
+  ): Promise<Prepared<{ data: Conversion; idempotencyKey: string }>> {
+    const swap = options.swap
+    if (!swap) throw new Error('No swap API is configured; set TGBP_API_KEY and TGBP_SWAP_BASE_URL')
+    const chain = getEvmToken(params.chain).chain
+    const swapChain = SWAP_CHAINS.find((c) => c === chain)
+    if (!swapChain) {
+      throw new TgbpKitError('UNKNOWN_CHAIN', `The swap API does not serve "${chain}"`, {
+        details: { chain, supported: SWAP_CHAINS },
       })
-      const amountField = params.direction === 'USDC_TO_TGBP' ? 'usdcAmount' : 'tgbpAmount'
-      return options.swap.createConversion(
-        {
-          chainId: swapChain,
-          direction: params.direction,
-          recipientAddress: params.recipient,
-          [amountField]: amount,
-          ...(params.minOut ? { minOut: params.minOut } : {}),
-        },
-        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {},
-      )
-    },
+    }
+    if (!isAddress(params.recipient)) {
+      throw new TgbpKitError('WRONG_CHAIN_ADDRESS', `"${params.recipient}" is not an EVM address`, {
+        details: { chain, address: params.recipient },
+      })
+    }
+    const decimals = params.direction === 'USDC_TO_TGBP' ? USDC_DECIMALS : 18
+    const amount = formatAmount(parseAmount(params.amount, decimals), decimals)
+    // Caps are in pounds. A USDC amount counts as the same number of pounds,
+    // which overstates it while a dollar is worth less than a pound.
+    await guard.authorize({
+      action: 'swap',
+      chain,
+      destination: params.recipient,
+      amount,
+    })
+    const inputs = {
+      chain,
+      direction: params.direction,
+      amount,
+      recipient: params.recipient,
+      minOut: params.minOut || undefined,
+    }
+    const idempotencyKey = await openSubmission('swap', inputs, params.idempotencyKey)
+    const amountField = params.direction === 'USDC_TO_TGBP' ? 'usdcAmount' : 'tgbpAmount'
+    return {
+      idempotencyKey,
+      async submit() {
+        const result = await swap.createConversion(
+          {
+            chainId: swapChain,
+            direction: params.direction,
+            recipientAddress: params.recipient,
+            [amountField]: amount,
+            ...(params.minOut ? { minOut: params.minOut } : {}),
+          },
+          keyOptions(idempotencyKey),
+        )
+        await closeSubmission('swap', inputs, idempotencyKey)
+        return result
+      },
+    }
   }
 }
 
@@ -263,7 +389,11 @@ const NOT_BURNED = new Set<string>([
  * recover. Only a failure known to have moved nothing says so; any other may
  * have burned already, and a second burn would destroy the tGBP twice.
  */
-function burnFailed(error: unknown, redemptionId: string): Error {
+function burnFailed(
+  error: unknown,
+  redemptionId: string,
+  idempotencyKey: string | undefined,
+): Error {
   const kit = isTgbpKitError(error) ? error : undefined
   const advice =
     kit && NOT_BURNED.has(kit.code)
@@ -277,7 +407,7 @@ function burnFailed(error: unknown, redemptionId: string): Error {
   return kit
     ? new TgbpKitError(kit.code, message, {
         cause: error,
-        details: { ...kit.details, redemptionId },
+        details: { ...kit.details, redemptionId, ...(idempotencyKey ? { idempotencyKey } : {}) },
       })
     : new Error(message, { cause: error })
 }

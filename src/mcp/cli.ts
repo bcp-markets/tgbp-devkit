@@ -3,7 +3,8 @@
  * tgbp-mcp: the tGBP MCP server over stdio. Configured by environment:
  *
  *   TGBP_POLICY_FILE        the spend policy (required)
- *   TGBP_LEDGER_FILE        the spend ledger; default <policy>.ledger.jsonl
+ *   TGBP_LEDGER_FILE        the spend ledger; default <policy>.ledger.jsonl. The
+ *                           submission journal is <ledger>.submissions.jsonl
  *   TGBP_API_KEY            enables mint, redeem and swap
  *   TGBP_ENVIRONMENT        sandbox (default) or production
  *   TGBP_SWAP_BASE_URL      the swap host; production uses its own by default
