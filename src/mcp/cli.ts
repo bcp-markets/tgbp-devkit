@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     throw new Error('TGBP_APPROVAL_TIMEOUT_SECONDS must be between 1 and 86400')
   }
 
-  const server = createTgbpMcpServer({
+  const options = {
     policy,
     ledgerPath: env.TGBP_LEDGER_FILE ?? `${policyPath}.ledger.jsonl`,
     approvalTimeoutMs: timeoutSeconds * 1000,
@@ -53,9 +53,13 @@ async function main(): Promise<void> {
       ? { swap: createTgbpSwapClient({ apiKey, baseUrl: swapBaseUrl }) }
       : {}),
     ...(env.TGBP_EVM_PRIVATE_KEY ? { evm: evmClients(env.TGBP_EVM_PRIVATE_KEY as Hex) } : {}),
+  }
+  // serveStdio answers a 2025-era initialize and a 2026-07-28 opening. It may build a server for
+  // a 2026-07-28 probe and close it before a 2025-era initialize, so each call builds a new one.
+  // Only the server it keeps runs tools, and every server shares the ledger and its lock.
+  serveStdio(() => createTgbpMcpServer(options), {
+    onerror: (error) => console.error(`tgbp-mcp: ${error.message}`),
   })
-  // serveStdio answers both a 2025-era initialize and a 2026-07-28 opening with this one server.
-  serveStdio(() => server)
   console.error(`tgbp-mcp: serving, spend policy ${policyPath} expires ${policy.expiresAt}`)
 }
 
