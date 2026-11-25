@@ -287,7 +287,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           .optional()
           .describe("Refuse the swap, and cancel its intent, if the intent's quote pays out less"),
         idempotencyKey: idempotencyKey.describe(
-          'To retry an earlier swap, pass its intentId; never for a new one. A retry counts against the caps again.',
+          'To retry an earlier swap, pass its intentId (6 to 18 characters); never for a new one. A retry counts against the caps again.',
         ),
       }),
       annotations: { destructiveHint: true, openWorldHint: true },

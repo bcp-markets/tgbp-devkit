@@ -113,11 +113,7 @@ class TestRequests:
             TgbpClient(api_key="k", base_url="https://api.tgbp.io?x=1")
 
     def test_builds_the_query_from_the_spec_model(self, client: TgbpClient, transport: FakeTransport) -> None:
-        hashes = dict.fromkeys(
-            ["sourceChainId", "sourceTxHash", "bridgeTxHash", "destinationTxHash", "partnerTransferTxHash"]
-        )
-        listed = {**fixture("mint"), **hashes}
-        transport.replies.append(reply(200, {"data": [listed], "pagination": fixture("pagination")}))
+        transport.replies.append(reply(200, {"data": [fixture("mint")], "pagination": fixture("pagination")}))
         since = datetime(2026, 10, 1, tzinfo=timezone.utc)
         page = client.mints.list(ListMintsQuery(status=["pending", "paid"], from_=since, per_page=50))
         assert page.data[0].id == "mint_1"

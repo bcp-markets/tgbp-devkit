@@ -339,7 +339,8 @@ that, the same inputs count as a new request with a new key. After a failure the
 a retry resends it. A saved key is reused for 24 hours, as long as the API keeps it. A swap's saved
 key is its swap intent's id: a retry finds the same intent, and the swap API converts an intent at
 most once. An intent that expired or was cancelled frees the inputs, so the next swap with them
-registers a new intent.
+registers a new intent. One that failed or was withdrawn may hold a deposit, so a swap with the same
+inputs is refused for 24 hours; a human checks the intent and its deposit.
 
 **A burn record needs a human.** Once a redemption exists, the server records its burn before
 sending it. If the server stops during the burn, or the burn fails in a way that may have sent it,

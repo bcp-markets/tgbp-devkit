@@ -18,7 +18,12 @@
     "nameOfPayer": null,
     "bank_transfer_details": {
       "reference": "TGBP-REF-1"
-    }
+    },
+    "sourceChainId": null,
+    "sourceTxHash": null,
+    "bridgeTxHash": null,
+    "destinationTxHash": null,
+    "partnerTransferTxHash": null
   },
   "pagination": {
     "page": 1,

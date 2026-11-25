@@ -81,25 +81,27 @@ function minted() {
  */
 const intents = new Map<string, Record<string, unknown>>()
 const converted = new Set<string>()
-function intent(id: string, overrides: Record<string, unknown> = {}) {
+type IntentBody = { id: string } & Record<string, unknown>
+/** The intent the swap API returns for `body`: the request's details and a firm quote. */
+function intent(body: IntentBody, overrides: Record<string, unknown> = {}) {
+  const { destinationChainId: _, ...details } = body
   return {
-    id,
+    ...details,
     status: 'active',
-    direction: 'TGBP_TO_USDC',
     targetAmount: '12.5',
     targetRawAmount: '12500000',
-    fillBy: '2026-10-21T12:30:00Z',
+    fillBy: '2999-01-01T00:00:00Z',
     ...overrides,
   }
 }
 const swap = {
-  createSwapIntent: vi.fn(async (body: { id: string }) => {
-    const found = intents.get(body.id) ?? intent(body.id)
+  createSwapIntent: vi.fn(async (body: IntentBody) => {
+    const found = intents.get(body.id) ?? intent(body)
     intents.set(body.id, found)
     return { data: found, idempotencyKey: body.id }
   }),
   cancelSwapIntent: vi.fn(async (id: string) => {
-    intents.set(id, intent(id, { status: 'cancelled' }))
+    intents.set(id, { ...intents.get(id), status: 'cancelled' })
     return { data: intents.get(id) }
   }),
   createConversion: vi.fn(async (body: { intentId: string }, _opts?: unknown): Promise<unknown> => {
@@ -536,9 +538,10 @@ describe('swap intents', () => {
     const first = await call(client, 'tgbp_swap', args)
     expect(first.isError).toBe(true)
     expect(first.body.message).toContain(
-      `Send exactly 10 tGBP from ${AGENT} to your swap deposit address before 2026-10-21T12:30:00Z`,
+      `Send exactly 10 tGBP from ${AGENT} to your swap deposit address before 2999-01-01T00:00:00Z`,
     )
     const [id] = intentIds()
+    expect(first.body.message).toContain(`idempotencyKey ${id}`)
     expect(first.body.details).toMatchObject({
       intentId: id,
       apiCode: 'confirmed_deposit_required',
@@ -580,8 +583,8 @@ describe('swap intents', () => {
   })
 
   it('starts a new intent once the saved one expired', async () => {
-    swap.createSwapIntent.mockImplementationOnce(async (body: { id: string }) => ({
-      data: intent(body.id, { status: 'expired' }),
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { status: 'expired' }),
       idempotencyKey: body.id,
     }))
     const client = await connect()
@@ -594,9 +597,51 @@ describe('swap intents', () => {
     expect([...converted]).toEqual([fresh])
   })
 
+  it('keeps a failed intent, which may hold a deposit, and never registers a second one', async () => {
+    const failed = async (body: IntentBody) => ({
+      data: intent(body, { status: 'failed', failureReason: 'bridge_failed' }),
+      idempotencyKey: body.id,
+    })
+    swap.createSwapIntent.mockImplementationOnce(failed).mockImplementationOnce(failed)
+    const client = await connect()
+    for (const _ of [1, 2]) {
+      const { isError, body } = await call(client, 'tgbp_swap', args)
+      expect(isError).toBe(true)
+      expect(body.message).toContain('a deposit for it may already have arrived. Send nothing more')
+    }
+    expect(new Set(intentIds()).size).toBe(1)
+    expect(swap.createConversion).not.toHaveBeenCalled()
+  })
+
+  it('refuses an intent that does not match the request, and converts nothing', async () => {
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { sourceRawAmount: '20000000000000000000' }),
+      idempotencyKey: body.id,
+    }))
+    const { isError, body } = await call(await connect(), 'tgbp_swap', args)
+    expect(isError).toBe(true)
+    expect(body.message).toContain('does not match the request (amount); nothing was converted')
+    expect(swap.createConversion).not.toHaveBeenCalled()
+  })
+
+  it('says to send nothing once the intent deadline has passed', async () => {
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { fillBy: '2020-01-01T00:00:00Z' }),
+      idempotencyKey: body.id,
+    }))
+    swap.createConversion.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      }),
+    )
+    const { body } = await call(await connect(), 'tgbp_swap', args)
+    expect(body.message).toContain('has passed; nothing was converted. Send nothing for it.')
+    expect(body.message).not.toContain('Send exactly')
+  })
+
   it('asks again for the conversion of an intent the swap API already converted', async () => {
-    swap.createSwapIntent.mockImplementationOnce(async (body: { id: string }) => ({
-      data: intent(body.id, { status: 'converted' }),
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { status: 'converted' }),
       idempotencyKey: body.id,
     }))
     const { isError } = await call(await connect(), 'tgbp_swap', { ...args, minOut: '99' })

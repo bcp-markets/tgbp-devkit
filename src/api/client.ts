@@ -29,8 +29,13 @@ export type CancelRequest = Schemas['CancelRequest']
 export type ListMintsQuery = Query<'listMints'>
 export type ListRedemptionsQuery = Omit<Query<'listRedemptions'>, 'Idempotency-Key'>
 export type MintResponse = Schemas['MintResponse']
+/** A mint with the transactions that carried it. */
+export type MintDetailResponse = Schemas['MintDetailResponse']
 export type MintListResponse = Schemas['MintListResponse']
 export type RedemptionResponse = Schemas['RedemptionResponse']
+/** A redemption, with a warning when its burn address is not yet proven to be yours. */
+export type RedemptionWithProofWarning = Schemas['RedemptionWithProofWarning']
+export type RedemptionDetailResponse = Schemas['RedemptionWithProofWarningResponse']
 export type RedemptionListResponse = Schemas['RedemptionWithProofWarningListResponse']
 export type RedemptionQuoteResponse = Schemas['RedemptionQuoteResponse']
 export type BurnConfirmationResponse = Schemas['BurnConfirmationResponse']
@@ -107,7 +112,7 @@ export function createTgbpClient(options: TgbpClientOptions) {
       /** Create a mint. tGBP is minted to `destinationAddress` once the bank transfer arrives. */
       create: (body: MintCreateRequest, opts?: CreateOptions) =>
         create<Mint>('/api/v1/mints', body, opts),
-      get: (mintId: string) => get<MintResponse>('/api/v1/mints/{mintId}', { mintId }),
+      get: (mintId: string) => get<MintDetailResponse>('/api/v1/mints/{mintId}', { mintId }),
       list: (query: ListMintsQuery = {}) =>
         get<MintListResponse>('/api/v1/mints', undefined, query),
       /**
@@ -134,9 +139,9 @@ export function createTgbpClient(options: TgbpClientOptions) {
        * `burnAddress`; GBP is paid out to `bankId` once the burn confirms.
        */
       create: (body: RedemptionCreateRequest, opts?: CreateOptions) =>
-        create<Redemption>('/api/v1/redemptions', body, opts),
+        create<RedemptionWithProofWarning>('/api/v1/redemptions', body, opts),
       get: (redemptionId: string) =>
-        get<RedemptionResponse>('/api/v1/redemptions/{redemptionId}', { redemptionId }),
+        get<RedemptionDetailResponse>('/api/v1/redemptions/{redemptionId}', { redemptionId }),
       list: (query: ListRedemptionsQuery = {}) =>
         get<RedemptionListResponse>('/api/v1/redemptions', undefined, query),
       /**

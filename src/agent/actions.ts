@@ -102,7 +102,7 @@ export type SwapDirection = 'USDC_TO_TGBP' | 'TGBP_TO_USDC'
 const GBP_DECIMALS = 2
 const USDC_DECIMALS = 6
 const TGBP_DECIMALS = 18
-/** The chains the swap API serves (its ChainId). */
+/** The chains the kit swaps on: the swap API's chains that the registry has a tGBP token for. */
 const SWAP_CHAINS = ['base', 'sepolia'] as const
 
 export function createAgentActions(options: AgentActionsOptions) {
@@ -430,13 +430,29 @@ export function createAgentActions(options: AgentActionsOptions) {
         recipientAddress: params.recipient,
         sourceRawAmount: sourceRaw.toString(),
       })
-      if (intent.status !== 'active' && intent.status !== 'converted') {
-        // This intent can never convert, so the same inputs may start a new one.
+      // The API refuses an id with other details; this also refuses an answer that does not match.
+      assertIntentMatches(intent, {
+        chain: swapChain,
+        direction: params.direction,
+        recipient: params.recipient,
+        sourceRaw,
+      })
+      if (intent.status === 'cancelled' || intent.status === 'expired') {
+        // Nothing filled it, and nothing can now, so the same inputs may start a new one.
         await closeSubmission('swap', inputs, intentId)
+        throw new Error(
+          `Swap intent ${intentId} is ${intent.status}; nothing was converted. A deposit sent for ` +
+            'it is not converted, so check for one before you swap again. The next call with ' +
+            'these inputs registers a new swap intent.',
+        )
+      }
+      if (intent.status !== 'active' && intent.status !== 'converted') {
+        // A deposit may already have arrived: the key stays open, so no second intent is funded.
         const reason = intent.failureReason ?? intent.withdrawalReason
         throw new Error(
-          `Swap intent ${intentId} is ${intent.status}${reason ? ` (${reason})` : ''}; nothing ` +
-            'was converted. Call again to start a new swap intent.',
+          `Swap intent ${intentId} is ${intent.status}${reason ? ` (${reason})` : ''} and was not ` +
+            'converted, but a deposit for it may already have arrived. Send nothing more for ' +
+            'this swap; ask a human to check the intent and its deposit.',
         )
       }
       // The API ignores minOut: the intent's firm quote is binding, so it is checked here.
@@ -507,6 +523,24 @@ function evmLower(address: string): string {
   return isAddress(address) ? address.toLowerCase() : address
 }
 
+/** Throws unless the swap API's intent is the one requested; nothing is converted or funded. */
+function assertIntentMatches(
+  intent: SwapIntent,
+  request: { chain: string; direction: SwapDirection; recipient: string; sourceRaw: bigint },
+): void {
+  const mismatch = (field: string) =>
+    new Error(
+      `Swap intent ${intent.id} does not match the request (${field}); nothing was converted. ` +
+        'Send no funds for it.',
+    )
+  if (intent.chainId !== undefined && intent.chainId !== request.chain) throw mismatch('chain')
+  if (intent.direction !== request.direction) throw mismatch('direction')
+  if (intent.recipientAddress?.toLowerCase() !== request.recipient.toLowerCase()) {
+    throw mismatch('recipient')
+  }
+  if (intent.sourceRawAmount !== request.sourceRaw.toString()) throw mismatch('amount')
+}
+
 /**
  * Throws unless the intent's firm quote pays at least `minOut`. Before it
  * throws it runs `cancel`, so nothing can fill an intent the caller refused.
@@ -554,15 +588,19 @@ function awaitingDeposit(
   const details = error.details ?? {}
   if (details.status !== 409 || details.apiCode !== 'confirmed_deposit_required') return undefined
   const token = intent.direction === 'TGBP_TO_USDC' ? 'tGBP' : 'USDC'
-  const by = intent.fillBy ? ` before ${intent.fillBy}` : ''
-  return new TgbpKitError(
-    'API_ERROR',
-    `Swap intent ${intent.id} is registered, but no confirmed deposit fills it yet; nothing was ` +
-      `converted. Send exactly ${amount} ${token} from ${depositor} to your swap deposit ` +
-      `address${by}, then call again with the same inputs. The swap API also converts it on its ` +
-      'own once the deposit confirms.',
-    { cause: error, details: { ...details, intentId: intent.id, fillBy: intent.fillBy } },
-  )
+  const passed = intent.fillBy !== undefined && Date.parse(intent.fillBy) <= Date.now()
+  const message = passed
+    ? `Swap intent ${intent.id} is registered, but no confirmed deposit fills it, and its ` +
+      `deadline ${intent.fillBy} has passed; nothing was converted. Send nothing for it.`
+    : `Swap intent ${intent.id} is registered, but no confirmed deposit fills it yet; nothing ` +
+      `was converted. Send exactly ${amount} ${token} from ${depositor} to your swap deposit ` +
+      `address${intent.fillBy ? ` before ${intent.fillBy}` : ''}, then call again with the same ` +
+      `inputs and idempotencyKey ${intent.id}. The swap API also converts it on its own once ` +
+      'the deposit confirms.'
+  return new TgbpKitError('API_ERROR', message, {
+    cause: error,
+    details: { ...details, intentId: intent.id, fillBy: intent.fillBy },
+  })
 }
 
 /** Failures raised before the burn was broadcast, or by a mined revert: no tGBP moved. */

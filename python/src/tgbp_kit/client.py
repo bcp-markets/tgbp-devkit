@@ -18,14 +18,16 @@ from .models import (
     ListRedemptionsQuery,
     Mint,
     MintCreateRequest,
+    MintDetailResponse,
     MintListResponse,
     MintResponse,
-    Redemption,
     RedemptionCreateRequest,
     RedemptionQuoteRequest,
     RedemptionQuoteResponse,
     RedemptionResponse,
+    RedemptionWithProofWarning,
     RedemptionWithProofWarningListResponse,
+    RedemptionWithProofWarningResponse,
     SimulateMintPayinResponse,
 )
 
@@ -136,10 +138,10 @@ class Mints:
         """
         return _create(self._config, "/api/v1/mints", to_body(MintCreateRequest, body), Mint, idempotency_key)
 
-    def get(self, mint_id: str) -> MintResponse:
+    def get(self, mint_id: str) -> MintDetailResponse:
         path = "/api/v1/mints/{mintId}"
         status, body = _http.request(self._config, "GET", path, path_params={"mintId": mint_id}, retry=True)
-        return parse(MintResponse, "GET", path, status, body)
+        return parse(MintDetailResponse, "GET", path, status, body)
 
     def list(self, query: ListMintsQuery | None = None) -> MintListResponse:
         path = "/api/v1/mints"
@@ -179,21 +181,23 @@ class Redemptions:
 
     def create(
         self, body: RedemptionCreateRequest | Mapping[str, Any], *, idempotency_key: str | None = None
-    ) -> Created[Redemption] | PendingApproval:
+    ) -> Created[RedemptionWithProofWarning] | PendingApproval:
         """Create a redemption.
 
         Then burn the tGBP by sending it to the returned `burnAddress`; GBP is paid out to
         `bankId` once the burn confirms.
         """
         body_json = to_body(RedemptionCreateRequest, body)
-        return _create(self._config, "/api/v1/redemptions", body_json, Redemption, idempotency_key)
+        return _create(
+            self._config, "/api/v1/redemptions", body_json, RedemptionWithProofWarning, idempotency_key
+        )
 
-    def get(self, redemption_id: str) -> RedemptionResponse:
+    def get(self, redemption_id: str) -> RedemptionWithProofWarningResponse:
         path = "/api/v1/redemptions/{redemptionId}"
         status, body = _http.request(
             self._config, "GET", path, path_params={"redemptionId": redemption_id}, retry=True
         )
-        return parse(RedemptionResponse, "GET", path, status, body)
+        return parse(RedemptionWithProofWarningResponse, "GET", path, status, body)
 
     def list(self, query: ListRedemptionsQuery | None = None) -> RedemptionWithProofWarningListResponse:
         path = "/api/v1/redemptions"

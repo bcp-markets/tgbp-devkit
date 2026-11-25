@@ -39,7 +39,8 @@ send to a different recipient to get round a refusal. A refused second call does
 deposit: the swap API converts a funded intent on its own.
 
 An intent that expired or was cancelled converts nothing. The next call with the same inputs
-registers a new one.
+registers a new one. An intent that failed or was withdrawn may already hold a deposit, so every
+call with the same inputs is refused: send nothing more, and ask a human to check it.
 
 ## Mainnet
 
