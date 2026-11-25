@@ -6,9 +6,13 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import {
+  Client,
+  InMemoryTransport,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client'
+import { createMcpHandler } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import express from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -82,25 +86,29 @@ afterEach(async () => {
 
 type ElicitAnswer = 'approve' | 'decline' | 'never'
 
-async function connect(
-  options: { elicit?: ElicitAnswer; server?: Partial<TgbpMcpServerOptions> } = {},
-) {
-  const server = createTgbpMcpServer({
+function createServer(options: Partial<TgbpMcpServerOptions> = {}) {
+  return createTgbpMcpServer({
     policy: POLICY,
     ledgerPath: join(dir, 'ledger.jsonl'),
     api: api as unknown as TgbpClient,
     swap: swap as unknown as TgbpSwapClient,
     evm: evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
     now: () => new Date('2026-10-21T12:00:00Z'),
-    ...options.server,
+    ...options,
   })
+}
+
+async function connect(
+  options: { elicit?: ElicitAnswer; server?: Partial<TgbpMcpServerOptions> } = {},
+) {
+  const server = createServer(options.server)
   const client = new Client(
     { name: 'test', version: '0' },
     { capabilities: options.elicit ? { elicitation: {} } : {} },
   )
   const answer = options.elicit
   if (answer) {
-    client.setRequestHandler(ElicitRequestSchema, async () => {
+    client.setRequestHandler('elicitation/create', async () => {
       if (answer === 'never') return new Promise(() => {})
       return answer === 'approve'
         ? { action: 'accept', content: { approve: true } }
@@ -109,6 +117,51 @@ async function connect(
   }
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
   await Promise.all([server.connect(serverSide), client.connect(clientSide)])
+  clients.push(client)
+  return client
+}
+
+/** A client pinned to protocol 2026-07-28, served over in-process HTTP as a remote host would serve it. */
+async function connectModern(options: { elicit?: boolean } = {}) {
+  const handler = createMcpHandler(() => createServer())
+  const client = new Client(
+    { name: 'test', version: '0' },
+    {
+      versionNegotiation: { mode: { pin: '2026-07-28' } },
+      capabilities: options.elicit ? { elicitation: {} } : {},
+    },
+  )
+  if (options.elicit) {
+    client.setRequestHandler('elicitation/create', async () => ({
+      action: 'accept',
+      content: { approve: true },
+    }))
+  }
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
+      fetch: (url, init) => handler.fetch(new Request(url, init)),
+    }),
+  )
+  clients.push(client)
+  return client
+}
+
+/** The tgbp-mcp entry point: serveStdio, here over an in-memory pipe in place of the process's stdio. */
+async function connectStdio(options: { modern?: boolean } = {}) {
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+  serveStdio(() => createServer(), { transport: serverSide })
+  const client = new Client(
+    { name: 'test', version: '0' },
+    {
+      capabilities: { elicitation: {} },
+      ...(options.modern ? { versionNegotiation: { mode: { pin: '2026-07-28' as const } } } : {}),
+    },
+  )
+  client.setRequestHandler('elicitation/create', async () => ({
+    action: 'accept',
+    content: { approve: true },
+  }))
+  await client.connect(clientSide)
   clients.push(client)
   return client
 }
@@ -135,6 +188,36 @@ describe('tgbp MCP server', () => {
       'tgbp_balance',
       'tgbp_mint',
       'tgbp_policy',
+      'tgbp_redeem',
+      'tgbp_swap',
+      'tgbp_transfer',
+      'tgbp_x402_pay',
+    ])
+  })
+
+  it('serves a client on protocol 2026-07-28 every tool', async () => {
+    const client = await connectModern()
+    expect(client.getProtocolEra()).toBe('modern')
+    const { tools } = await client.listTools()
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'tgbp_balance',
+      'tgbp_mint',
+      'tgbp_policy',
+      'tgbp_redeem',
+      'tgbp_swap',
+      'tgbp_transfer',
+      'tgbp_x402_pay',
+    ])
+  })
+
+  it('makes the client ask the human on every call to a tool that moves value', async () => {
+    const { tools } = await (await connect()).listTools()
+    const marked = tools
+      .filter((t) => t._meta?.['anthropic/requiresUserInteraction'] === true)
+      .map((t) => t.name)
+      .sort()
+    expect(marked).toEqual([
+      'tgbp_mint',
       'tgbp_redeem',
       'tgbp_swap',
       'tgbp_transfer',
@@ -220,6 +303,20 @@ describe('redemption over the approval threshold', () => {
     expectNothingSent()
   })
 
+  it.each([
+    ['cannot ask', false],
+    ['can ask', true],
+  ])(
+    'is refused before any signing or API call on a 2026-07-28 connection whose client %s',
+    async (_, elicit) => {
+      const { body } = await call(await connectModern({ elicit }), 'tgbp_redeem', redeem)
+      expect(body.code).toBe('SPEND_POLICY_DENIED')
+      expect(body.details.rule).toBe('redemptionApprovalAbove')
+      if (elicit) expect(body.details.approverError).toMatch(/cannot carry the question/)
+      expectNothingSent()
+    },
+  )
+
   it('is refused when the human declines', async () => {
     const { body } = await call(await connect({ elicit: 'decline' }), 'tgbp_redeem', redeem)
     expect(body.details.rule).toBe('redemptionApprovalAbove')
@@ -249,6 +346,23 @@ describe('redemption over the approval threshold', () => {
     expect(chain.transfer).toHaveBeenCalledWith(
       expect.objectContaining({ to: BURN, amount: 80_000_000_000_000_000_000n }),
     )
+  })
+
+  it('asks the human over stdio on a 2025-era connection', async () => {
+    const client = await connectStdio()
+    expect(client.getProtocolEra()).toBe('legacy')
+    const { isError, body } = await call(client, 'tgbp_redeem', redeem)
+    expect(isError).toBe(false)
+    expect(body.burnHash).toBe('0xburn')
+  })
+
+  it('is refused over stdio on a 2026-07-28 connection, and says why', async () => {
+    const client = await connectStdio({ modern: true })
+    expect(client.getProtocolEra()).toBe('modern')
+    const { body } = await call(client, 'tgbp_redeem', redeem)
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details.approverError).toMatch(/cannot carry the question/)
+    expectNothingSent()
   })
 })
 
