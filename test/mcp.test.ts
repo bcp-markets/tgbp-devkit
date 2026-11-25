@@ -38,6 +38,7 @@ vi.mock('../src/evm/index.js', () => chain)
 
 const AGENT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
 const BURN = '0x000000000000000000000000000000000000dEaD'
+const DEPOSIT = '0x2222222222222222222222222222222222222222'
 
 const POLICY: SpendPolicy = {
   version: 1,
@@ -75,7 +76,42 @@ function created(overrides: Record<string, unknown> = {}) {
 function minted() {
   return { status: 'created', data: { mintId: 'mint_1', status: 'pending' }, idempotencyKey: 'k' }
 }
-const swap = { createConversion: vi.fn(async () => ({ data: {}, idempotencyKey: 'k' })) }
+/**
+ * The swap API's dedupe: an intent's id returns that intent, and each intent
+ * converts at most once. `converted` holds the intents that have a conversion.
+ */
+const intents = new Map<string, Record<string, unknown>>()
+const converted = new Set<string>()
+type IntentBody = { id: string } & Record<string, unknown>
+/** The intent the swap API returns for `body`: the request's details and a firm quote. */
+function intent(body: IntentBody, overrides: Record<string, unknown> = {}) {
+  const { destinationChainId: _, ...details } = body
+  return {
+    ...details,
+    status: 'active',
+    targetAmount: '12.5',
+    targetRawAmount: '12500000',
+    fillBy: '2999-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
+const swap = {
+  createSwapIntent: vi.fn(async (body: IntentBody) => {
+    const found = intents.get(body.id) ?? intent(body)
+    intents.set(body.id, found)
+    return { data: found, idempotencyKey: body.id }
+  }),
+  cancelSwapIntent: vi.fn(async (id: string) => {
+    // The swap API withdraws an intent it cancels.
+    intents.set(id, { ...intents.get(id), status: 'withdrawn' })
+    return { data: intents.get(id) }
+  }),
+  getDepositSession: vi.fn(async () => ({ data: { depositAddress: DEPOSIT } })),
+  createConversion: vi.fn(async (body: { intentId: string }, _opts?: unknown): Promise<unknown> => {
+    converted.add(body.intentId)
+    return { data: { id: 'conv_1', status: 'sweep_pending' }, idempotencyKey: 'k' }
+  }),
+}
 const evm = vi.fn(() => ({
   publicClient: {},
   walletClient: { account: { address: AGENT } },
@@ -87,6 +123,8 @@ let clients: Client[] = []
 beforeEach(async () => {
   vi.clearAllMocks()
   api.redemptions.create.mockImplementation(async () => created())
+  intents.clear()
+  converted.clear()
   dir = await mkdtemp(join(tmpdir(), 'tgbp-mcp-'))
 })
 
@@ -190,6 +228,7 @@ function expectNothingSent() {
   expect(chain.getBalance).not.toHaveBeenCalled()
   expect(api.mints.create).not.toHaveBeenCalled()
   expect(api.redemptions.create).not.toHaveBeenCalled()
+  expect(swap.createSwapIntent).not.toHaveBeenCalled()
   expect(swap.createConversion).not.toHaveBeenCalled()
 }
 
@@ -451,18 +490,204 @@ describe('swap and mint input', () => {
     expectNothingSent()
   })
 
-  it('sends the canonical amount and passes the idempotency key back to the API', async () => {
-    await call(await connect(), 'tgbp_swap', {
+  it('registers the swap intent under the key, then converts that intent', async () => {
+    const { isError, body } = await call(await connect(), 'tgbp_swap', {
       chain: 'sepolia',
       direction: 'TGBP_TO_USDC',
       amount: ' 010.50 ',
       recipient: AGENT,
       idempotencyKey: 'retry_1',
     })
+    expect(isError).toBe(false)
+    expect(swap.createSwapIntent).toHaveBeenCalledWith({
+      id: 'retry_1',
+      chainId: 'sepolia',
+      destinationChainId: 'sepolia',
+      direction: 'TGBP_TO_USDC',
+      recipientAddress: AGENT,
+      sourceRawAmount: '10500000000000000000',
+    })
     expect(swap.createConversion).toHaveBeenCalledWith(
-      expect.objectContaining({ chainId: 'sepolia', tgbpAmount: '10.5' }),
+      expect.objectContaining({ chainId: 'sepolia', intentId: 'retry_1', tgbpAmount: '10.5' }),
       { idempotencyKey: 'retry_1' },
     )
+    expect(body).toMatchObject({ intentId: 'retry_1', idempotencyKey: 'retry_1' })
+  })
+
+  it('refuses a key too short to be a swap intent id before asking the policy', async () => {
+    const { isError } = await call(await connect(), 'tgbp_swap', {
+      chain: 'sepolia',
+      direction: 'TGBP_TO_USDC',
+      amount: '10',
+      recipient: AGENT,
+      idempotencyKey: 'abc',
+    })
+    expect(isError).toBe(true)
+    expectNothingSent()
+  })
+})
+
+describe('swap intents', () => {
+  const args = { chain: 'sepolia', direction: 'TGBP_TO_USDC', amount: '10', recipient: AGENT }
+  const intentIds = () => swap.createSwapIntent.mock.calls.map(([body]) => body.id)
+
+  it('says how to fund an intent no deposit fills yet, and converts that intent on the retry', async () => {
+    swap.createConversion.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      }),
+    )
+    const client = await connect()
+    const first = await call(client, 'tgbp_swap', args)
+    expect(first.isError).toBe(true)
+    expect(first.body.message).toContain(
+      `Send exactly 10 tGBP from ${AGENT} to the swap deposit address ${DEPOSIT}, mined before 2999-01-01T00:00:00Z`,
+    )
+    const [id] = intentIds()
+    expect(first.body.message).toContain(`idempotencyKey ${id}`)
+    expect(first.body.details).toMatchObject({
+      intentId: id,
+      apiCode: 'confirmed_deposit_required',
+    })
+
+    expect((await call(client, 'tgbp_swap', args)).isError).toBe(false)
+    expect(intentIds()).toEqual([id, id])
+    expect([...converted]).toEqual([id])
+  })
+
+  it('tells a resumed swap to wait for a deposit already sent, never to send a second', async () => {
+    const noDeposit = () =>
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      })
+    swap.createConversion.mockRejectedValueOnce(noDeposit()).mockRejectedValueOnce(noDeposit())
+    const client = await connect()
+    await call(client, 'tgbp_swap', args)
+    const { body } = await call(client, 'tgbp_swap', args)
+    expect(body.message).toContain('If its deposit was already sent, send nothing more')
+    expect(new Set(intentIds()).size).toBe(1)
+  })
+
+  it('cancels an intent whose firm quote pays less than minOut, and converts nothing', async () => {
+    const client = await connect()
+    const { isError, body } = await call(client, 'tgbp_swap', { ...args, minOut: '12.6' })
+    expect(isError).toBe(true)
+    expect(body.message).toContain('pays 12.5, less than minOut 12.6; nothing was converted')
+    const [id] = intentIds()
+    expect(swap.cancelSwapIntent).toHaveBeenCalledWith(id)
+    expect(swap.createConversion).not.toHaveBeenCalled()
+    // The cancelled intent is closed, so the same inputs ask for a fresh quote.
+    await call(client, 'tgbp_swap', { ...args, minOut: '12.6' })
+    expect(new Set(intentIds()).size).toBe(2)
+  })
+
+  it('never cancels a resumed intent, whose deposit may be on the way', async () => {
+    swap.createConversion.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      }),
+    )
+    const client = await connect()
+    await call(client, 'tgbp_swap', args)
+    const { body } = await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(body.message).toContain('do not fund it: an earlier call may have asked for its deposit')
+    expect(swap.cancelSwapIntent).not.toHaveBeenCalled()
+  })
+
+  it('converts an intent whose firm quote pays at least minOut', async () => {
+    const { isError } = await call(await connect(), 'tgbp_swap', { ...args, minOut: '12.5' })
+    expect(isError).toBe(false)
+    expect(swap.cancelSwapIntent).not.toHaveBeenCalled()
+    expect(converted.size).toBe(1)
+  })
+
+  it('keeps a refused intent open when it cannot be cancelled, so a retry finds it again', async () => {
+    swap.cancelSwapIntent.mockRejectedValueOnce(new Error('cancel failed'))
+    const client = await connect()
+    const { body } = await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(body.message).toContain('Cancelling it failed, so do not fund it: cancel failed')
+    await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(new Set(intentIds()).size).toBe(1)
+    expect(swap.createConversion).not.toHaveBeenCalled()
+  })
+
+  it('keeps a refused intent open when the swap API does not confirm the cancel', async () => {
+    swap.cancelSwapIntent.mockResolvedValueOnce({ data: { status: 'converted' } } as never)
+    const client = await connect()
+    const { body } = await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(body.message).toContain('Cancelling it failed, so do not fund it')
+    await call(client, 'tgbp_swap', { ...args, minOut: '13' })
+    expect(new Set(intentIds()).size).toBe(1)
+  })
+
+  it('starts a new intent once the saved one expired', async () => {
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { status: 'expired' }),
+      idempotencyKey: body.id,
+    }))
+    const client = await connect()
+    const first = await call(client, 'tgbp_swap', args)
+    expect(first.isError).toBe(true)
+    expect(first.body.message).toMatch(/is expired; nothing was converted/)
+    expect((await call(client, 'tgbp_swap', args)).isError).toBe(false)
+    const [expired, fresh] = intentIds()
+    expect(fresh).not.toBe(expired)
+    expect([...converted]).toEqual([fresh])
+  })
+
+  it('keeps a failed intent, which may hold a deposit, and never registers a second one', async () => {
+    const failed = async (body: IntentBody) => ({
+      data: intent(body, { status: 'failed', failureReason: 'bridge_failed' }),
+      idempotencyKey: body.id,
+    })
+    swap.createSwapIntent.mockImplementationOnce(failed).mockImplementationOnce(failed)
+    const client = await connect()
+    for (const _ of [1, 2]) {
+      const { isError, body } = await call(client, 'tgbp_swap', args)
+      expect(isError).toBe(true)
+      expect(body.message).toContain('a deposit for it may already have arrived. Send nothing more')
+    }
+    expect(new Set(intentIds()).size).toBe(1)
+    expect(swap.createConversion).not.toHaveBeenCalled()
+  })
+
+  it('refuses an intent that does not match the request, and converts nothing', async () => {
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { sourceRawAmount: '20000000000000000000' }),
+      idempotencyKey: body.id,
+    }))
+    const { isError, body } = await call(await connect(), 'tgbp_swap', args)
+    expect(isError).toBe(true)
+    expect(body.message).toContain('does not match the request (amount); nothing was converted')
+    expect(swap.createConversion).not.toHaveBeenCalled()
+  })
+
+  it('says to send nothing once the intent deadline has passed', async () => {
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { fillBy: '2020-01-01T00:00:00Z' }),
+      idempotencyKey: body.id,
+    }))
+    swap.createConversion.mockRejectedValueOnce(
+      new TgbpKitError('API_ERROR', 'POST /api/conversions failed with 409', {
+        details: { status: 409, apiCode: 'confirmed_deposit_required' },
+      }),
+    )
+    const { body } = await call(await connect(), 'tgbp_swap', args)
+    expect(body.message).toContain('has passed; nothing was converted. Send nothing for it.')
+    expect(body.message).not.toContain('Send exactly')
+  })
+
+  it('asks again for the conversion of an intent the swap API already converted', async () => {
+    swap.createSwapIntent.mockImplementationOnce(async (body: IntentBody) => ({
+      data: intent(body, { status: 'converted' }),
+      idempotencyKey: body.id,
+    }))
+    const { isError, body } = await call(await connect(), 'tgbp_swap', { ...args, minOut: '99' })
+    // Its quote was accepted when it converted; the repeat returns that conversion.
+    expect(isError).toBe(false)
+    expect(body.replayed).toBe(true)
+    expect(swap.cancelSwapIntent).not.toHaveBeenCalled()
+    expect(converted.size).toBe(1)
   })
 })
 
@@ -807,7 +1032,14 @@ describe('tasks on a 2026-07-28 connection', () => {
     expect(task.status).toBe('completed')
     // The same payload a client without tasks gets on the call itself.
     const blocking = await call(await connect(), name, args)
-    expect(JSON.parse(task.result?.content[0]?.text ?? 'null')).toEqual(blocking.body)
+    // A swap's second call is a new swap with a new intent id.
+    const {
+      intentId: _a,
+      idempotencyKey: _b,
+      ...taskBody
+    } = JSON.parse(task.result?.content[0]?.text ?? 'null')
+    const { intentId: _c, idempotencyKey: _d, ...blockingBody } = blocking.body
+    expect(taskBody).toEqual(blockingBody)
   })
 
   it('answers on the call itself when the client does not declare tasks', async () => {
@@ -955,12 +1187,6 @@ describe('a retry after the server dies mid-call', () => {
       minted,
     ],
     [
-      'tgbp_swap',
-      { chain: 'sepolia', direction: 'TGBP_TO_USDC', amount: '10', recipient: AGENT },
-      swap.createConversion,
-      () => ({ data: {}, idempotencyKey: 'k' }),
-    ],
-    [
       'tgbp_redeem',
       { chain: 'sepolia', bankId: 'bank_ok', amount: '50' },
       api.redemptions.create,
@@ -993,6 +1219,24 @@ describe('a retry after the server dies mid-call', () => {
       expect(submitted.size).toBe(1)
     },
   )
+
+  it('re-registers the same swap intent, so the swap converts once', async () => {
+    const args = { chain: 'sepolia', direction: 'TGBP_TO_USDC', amount: '10', recipient: AGENT }
+    swap.createConversion.mockImplementationOnce(async (body: { intentId: string }) => {
+      converted.add(body.intentId)
+      return new Promise(() => {})
+    })
+    await dieDuring('tgbp_swap', args, () => expect(swap.createConversion).toHaveBeenCalledTimes(1))
+
+    const { isError, body } = await call(await connect({ elicit: 'approve' }), 'tgbp_swap', args)
+    expect(isError).toBe(false)
+    const conversions = swap.createConversion.mock.calls.map(([sent]) => sent.intentId)
+    expect(conversions).toHaveLength(2)
+    expect(conversions[1]).toBe(conversions[0])
+    expect(swap.createSwapIntent.mock.calls.map(([sent]) => sent.id)).toEqual(conversions)
+    expect([...converted]).toEqual([conversions[0]])
+    expect(body.intentId).toBe(conversions[0])
+  })
 
   it('never burns a second time when it died during the burn', async () => {
     const redeem = { chain: 'sepolia', bankId: 'bank_ok', amount: '50' }

@@ -91,6 +91,7 @@ class Generator:
         self.paths: Schema = spec["paths"]
         self.blocks: list[str] = []
         self.names: set[str] = set()
+        self.models: set[str] = set()
         self.imports: set[str] = set()
 
     def resolve(self, node: Schema) -> Schema:
@@ -160,11 +161,29 @@ class Generator:
             return self.model(hint, schema)
         raise ValueError(f"{hint}: unsupported schema {json.dumps(schema)[:120]}")
 
-    def model(self, name: str, schema: Schema, *, query: bool = False) -> str:
+    def derived(self, name: str, schema: Schema) -> None:
+        """An allOf of models and plain objects: a model inheriting each model, plus the objects' fields."""
+        bases: list[str] = []
+        fields: Schema = {"type": "object", "properties": {}, "required": []}
+        for member in schema["allOf"]:
+            if "$ref" in member:
+                base = str(member["$ref"]).split("/")[-1]
+                if base not in self.models:
+                    raise ValueError(f"{name}: allOf member {base} is not a model defined before it")
+                bases.append(base)
+            elif member.get("type") == "object" and set(member) <= {"type", "properties", "required"}:
+                fields["properties"].update(member.get("properties", {}))
+                fields["required"].extend(member.get("required", []))
+            else:
+                raise ValueError(f"{name}: allOf member is neither a model nor a plain object")
+        self.model(name, fields, bases=bases)
+
+    def model(self, name: str, schema: Schema, *, query: bool = False, bases: list[str] | None = None) -> str:
         """Emits a model class. A query model only ever serialises, so it aliases on output only."""
         self.claim(name)
+        self.models.add(name)
         required = set(schema.get("required", [])) - OPTIONAL.get(name, set())
-        lines = [f"class {name}(Model):"]
+        lines = [f"class {name}({', '.join(bases or ['Model'])}):"]
         for field, prop in sorted(schema["properties"].items()):
             if field in OMIT.get(name, set()):
                 continue
@@ -234,7 +253,9 @@ class Generator:
 
     def render(self, source: str) -> str:
         schemas = sorted(self.components.get("schemas", {}).items())
-        models = {
+        # A schema that is an allOf of several members inherits its models, so it follows them all.
+        derived = {name for name, schema in schemas if set(schema) == {"allOf"} and len(schema["allOf"]) > 1}
+        models = derived | {
             name for name, schema in schemas if schema.get("type") == "object" and "properties" in schema
         }
         # Aliases run at import time, so they come first and may not name a model.
@@ -244,8 +265,11 @@ class Generator:
                 if any(re.search(rf"\b{m}\b", self.blocks[-1]) for m in models):
                     raise ValueError(f"alias {name} names a model; the generator cannot order that")
         for name, schema in schemas:
-            if name in models:
+            if name in models - derived:
                 self.model(name, schema)
+        for name, schema in schemas:
+            if name in derived:
+                self.derived(name, schema)
         for op_id, op in self.operations():
             self.query_model(op_id, op)
             self.response_model(op_id, op)

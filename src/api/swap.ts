@@ -39,6 +39,12 @@ export type DepositBalanceQuery = Query<'getDepositBalance'>
 /** The swap API's SwapIntentId format. */
 const SWAP_INTENT_ID = /^[A-Za-z0-9_-]{6,128}$/
 
+export function assertSwapIntentId(id: string): void {
+  if (!SWAP_INTENT_ID.test(id)) {
+    throw new RangeError(`Invalid swap intent id "${id}": use 6 to 128 letters, digits, "_" or "-"`)
+  }
+}
+
 export const SWAP_PRODUCTION_URL = 'https://swap-api.tgbp.io'
 
 export type TgbpSwapClientOptions = HttpOptions & {
@@ -96,11 +102,7 @@ export function createTgbpSwapClient(options: TgbpSwapClientOptions) {
       body: CreateSwapIntentRequest,
     ): Promise<SwapCreateResult<SwapIntent>> => {
       const id = body.id ?? generateIdempotencyKey()
-      if (!SWAP_INTENT_ID.test(id)) {
-        throw new RangeError(
-          `Invalid swap intent id "${id}": use 6 to 128 letters, digits, "_" or "-"`,
-        )
-      }
+      assertSwapIntentId(id)
       const res = await request<Data<SwapIntent>>(config, {
         method: 'POST',
         path: '/api/swap-intents',

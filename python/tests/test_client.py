@@ -179,7 +179,7 @@ class TestIdempotency:
         self, swap: TgbpSwapClient, transport: FakeTransport
     ) -> None:
         transport.replies.append(reply(201, {"data": {"id": "conv_1", "status": "requested"}}))
-        result = swap.create_conversion({"chainId": "sepolia"})
+        result = swap.create_conversion({"chainId": "sepolia", "intentId": "intent_1"})
         assert transport.calls[0].headers["idempotency-key"] == result.idempotency_key
         assert result.data.id == "conv_1"
 

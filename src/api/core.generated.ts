@@ -162,8 +162,11 @@ export interface components {
             data: {
                 bankProviderCode: string;
                 burnTxHash: string;
+                /** @enum {string} */
+                holdCause?: "ownership_unproven";
                 message?: string;
                 redemptionId: string;
+                redemptionStatus: string;
                 /** @enum {string} */
                 status: "payout_initiated" | "payout_skipped" | "payout_withheld";
             };
@@ -233,7 +236,7 @@ export interface components {
             relationshipToCustomer: "business_customer_supplier" | "family_friend_colleague" | "employer_employee" | "other" | null;
             sourceBankAccountId?: string | null;
             /** @enum {string} */
-            status: "pending" | "paid" | "in_transit" | "confirmed" | "failed" | "cancelled" | "pending_compliance_review";
+            status: "pending" | "paid" | "in_transit" | "confirmed" | "failed" | "cancelled" | "pending_compliance_review" | "returned";
             tx_hash: string | null;
             /** Format: date-time */
             updated_at: string;
@@ -282,13 +285,24 @@ export interface components {
             relationshipToCustomer?: "business_customer_supplier" | "family_friend_colleague" | "employer_employee" | "other";
             sourceBankAccountId?: string;
         };
+        MintDetailResponse: {
+            data: components["schemas"]["MintWithTxHashes"];
+        };
         MintListResponse: {
-            data: components["schemas"]["Mint"][];
+            data: components["schemas"]["MintWithTxHashes"][];
             pagination: components["schemas"]["Pagination"];
         };
         MintResponse: {
             data: components["schemas"]["Mint"];
         };
+        MintTxHashes: {
+            bridgeTxHash: string | null;
+            destinationTxHash: string | null;
+            partnerTransferTxHash: string | null;
+            sourceChainId: string | null;
+            sourceTxHash: string | null;
+        };
+        MintWithTxHashes: components["schemas"]["Mint"] & components["schemas"]["MintTxHashes"];
         Pagination: {
             /** Format: uri */
             first_page?: string;
@@ -399,9 +413,8 @@ export interface components {
             IdempotencyKey: string;
             reference?: string;
         };
-        RedemptionListResponse: {
-            data: components["schemas"]["Redemption"][];
-            pagination: components["schemas"]["Pagination"];
+        RedemptionCreateResponse: {
+            data: components["schemas"]["RedemptionWithProofWarning"];
         };
         RedemptionQuoteRequest: {
             amount: components["schemas"]["Amount"];
@@ -418,6 +431,19 @@ export interface components {
         };
         RedemptionResponse: {
             data: components["schemas"]["Redemption"];
+        };
+        RedemptionWithProofWarning: components["schemas"]["Redemption"] & {
+            proofWarning?: {
+                message: string;
+                unprovenBurnAddresses: string[];
+            };
+        };
+        RedemptionWithProofWarningListResponse: {
+            data: components["schemas"]["RedemptionWithProofWarning"][];
+            pagination: components["schemas"]["Pagination"];
+        };
+        RedemptionWithProofWarningResponse: {
+            data: components["schemas"]["RedemptionWithProofWarning"];
         };
     };
     responses: {
@@ -460,6 +486,14 @@ export interface components {
                 "X-Rate-Limit-Limit"?: number;
                 "X-Rate-Limit-Remaining"?: number;
                 "X-Rate-Limit-Reset"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        InternalServerError: {
+            headers: {
                 [name: string]: unknown;
             };
             content: {
@@ -521,7 +555,7 @@ export interface operations {
                 page?: components["parameters"]["Page"];
                 partnerId?: string;
                 per_page?: components["parameters"]["PerPage"];
-                status?: ("pending" | "paid" | "in_transit" | "confirmed" | "failed" | "cancelled" | "pending_compliance_review")[];
+                status?: ("pending" | "paid" | "in_transit" | "confirmed" | "failed" | "cancelled" | "pending_compliance_review" | "returned")[];
                 to?: components["parameters"]["ToDate"];
             };
             header?: never;
@@ -610,7 +644,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MintResponse"];
+                    "application/json": components["schemas"]["MintDetailResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -740,7 +774,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RedemptionListResponse"];
+                    "application/json": components["schemas"]["RedemptionWithProofWarningListResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -766,7 +800,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RedemptionResponse"];
+                    "application/json": components["schemas"]["RedemptionCreateResponse"];
                 };
             };
             202: components["responses"]["ApprovalGated"];
@@ -792,7 +826,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RedemptionResponse"];
+                    "application/json": components["schemas"]["RedemptionWithProofWarningResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -832,6 +866,22 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] & {
+                        error?: {
+                            details?: {
+                                /** @enum {string} */
+                                reason?: "burn_not_recorded" | "burn_not_bound";
+                            };
+                        };
+                    };
+                };
+            };
+            500: components["responses"]["InternalServerError"];
         };
     };
     cancelRedemption: {

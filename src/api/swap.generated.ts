@@ -184,15 +184,22 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /** @enum {string} */
-        ChainId: "base" | "sepolia";
+        CapabilityChainId: "base" | "ethereum" | "arbitrum" | "polygon" | "sepolia" | "solana" | "solana-devnet";
+        /** @enum {string} */
+        ChainId: "base" | "ethereum" | "arbitrum" | "polygon" | "sepolia";
         Conversion: {
+            chainId?: components["schemas"]["ChainId"];
             /** Format: date-time */
             createdAt?: string;
+            destinationChainId?: components["schemas"]["ChainId"];
             discountBps?: number;
             effectiveRate?: string;
+            excessRawAmount?: string;
             gbpAmount?: string;
             id?: string;
             minimumTargetAmount?: string;
+            receivedRawAmount?: string;
+            routeCapabilityId?: string;
             sourceCurrency?: components["schemas"]["Currency"];
             status?: components["schemas"]["ConversionStatus"];
             targetCurrency?: components["schemas"]["Currency"];
@@ -202,26 +209,32 @@ export interface components {
         ConversionStatus: "requested" | "sweep_pending" | "submitted" | "minted" | "transferred" | "failed";
         CreateConversionRequest: {
             chainId: components["schemas"]["ChainId"];
+            destinationChainId?: components["schemas"]["ChainId"];
             direction?: components["schemas"]["SwapDirection"];
-            intentId?: components["schemas"]["SwapIntentId"];
+            intentId: components["schemas"]["SwapIntentId"];
+            /** @deprecated */
             minOut?: string;
+            /** @deprecated */
             minTargetAmount?: string;
             recipientAddress?: components["schemas"]["EvmAddress"];
-            tgbpAmount?: string;
-            usdcAmount?: string;
+            tgbpAmount?: components["schemas"]["TgbpAmount"];
+            usdcAmount?: components["schemas"]["UsdcAmount"];
         };
         CreateSwapIntentRequest: {
             chainId: components["schemas"]["ChainId"];
+            destinationChainId?: components["schemas"]["ChainId"];
             direction: components["schemas"]["SwapDirection"];
             id: components["schemas"]["SwapIntentId"];
             recipientAddress: components["schemas"]["EvmAddress"];
-            sourceAmount: string;
+            /** @deprecated */
+            sourceAmount?: string;
             sourceRawAmount: string;
             /** @deprecated */
             targetAmount?: string;
         };
         /** @enum {string} */
         Currency: "USDC" | "tGBP";
+        DecimalAmount: string;
         Deposit: {
             chainId?: string;
             confirmationsSeen?: number;
@@ -229,6 +242,7 @@ export interface components {
             confirmedAt?: string;
             /** Format: date-time */
             createdAt?: string;
+            excess?: components["schemas"]["DepositExcess"];
             exchange?: components["schemas"]["DepositExchange"];
             fromAddress?: components["schemas"]["EvmAddress"];
             id?: string;
@@ -255,20 +269,33 @@ export interface components {
             tokenDecimals?: number;
             tokenSymbol?: components["schemas"]["Currency"];
         };
+        DepositExcess: {
+            rawAmount: string;
+            /** @enum {string} */
+            status: "held" | "returning" | "returned";
+            txHash?: string;
+        };
         DepositExchange: {
+            chainId?: components["schemas"]["ChainId"];
             /** Format: date-time */
             createdAt?: string;
+            destinationChainId?: components["schemas"]["ChainId"];
             discountBps?: number;
             effectiveRate?: string;
             gbpAmount?: string;
             id?: string;
             minimumTargetAmount?: string;
             rate?: string;
+            routeCapabilityId?: string;
+            settlementProgress?: components["schemas"]["SwapSettlementProgress"];
             sourceCurrency?: components["schemas"]["Currency"];
             status?: components["schemas"]["ConversionStatus"];
+            swapIntentId?: string;
             targetCurrency?: components["schemas"]["Currency"];
             tgbpTransferTxHash?: string;
             usdcAmount?: string;
+            /** Format: date-time */
+            voidedAt?: string;
         };
         DepositSession: {
             addressGenerationDisabledReason?: string;
@@ -277,10 +304,12 @@ export interface components {
             chainId?: components["schemas"]["ChainId"];
             chainName?: string;
             depositAddress?: components["schemas"]["EvmAddress"];
+            /** @enum {string} */
+            fundingRequirement?: "registered_swap_intent";
             id?: string;
             requiredConfirmations?: number;
             /** @enum {string} */
-            status?: "address_required" | "active" | "risk_hold" | "disabled";
+            status?: "address_required" | "active" | "risk_hold" | "disabled" | "unverified";
             tokenAddress?: components["schemas"]["EvmAddress"];
             tokenDecimals?: number;
             tokenSymbol?: components["schemas"]["Currency"];
@@ -350,6 +379,7 @@ export interface components {
             /** @enum {string} */
             pricingMode?: "production" | "staging";
             pricingQuality?: components["schemas"]["PricingQuality"];
+            pricingSizeMultiplier?: number;
             providerQuotes?: components["schemas"]["PricingProviderQuote"][];
             /** Format: date-time */
             rateExpiresAt: string;
@@ -372,10 +402,12 @@ export interface components {
         };
         SupportedNetwork: {
             chainId?: number;
+            /** @enum {string} */
+            chainType?: "evm" | "solana";
             displayName?: string;
-            id?: components["schemas"]["ChainId"];
+            id?: components["schemas"]["CapabilityChainId"];
             requiredConfirmations?: number;
-            tokenAddress?: components["schemas"]["EvmAddress"];
+            tokenAddress?: string;
             tokenDecimals?: number;
             tokenSymbol?: components["schemas"]["Currency"];
         };
@@ -387,6 +419,7 @@ export interface components {
             chainId?: components["schemas"]["ChainId"];
             /** Format: date-time */
             createdAt?: string;
+            destinationChainId?: components["schemas"]["ChainId"];
             direction?: components["schemas"]["SwapDirection"];
             failureReason?: string;
             /** Format: date-time */
@@ -398,6 +431,7 @@ export interface components {
             quote?: components["schemas"]["Quote"];
             quoteVersion?: number;
             recipientAddress?: components["schemas"]["EvmAddress"];
+            routeCapabilityId?: string;
             sourceAmount?: string;
             sourceCurrency?: components["schemas"]["Currency"];
             sourceRawAmount?: string;
@@ -417,6 +451,17 @@ export interface components {
             maxTransactionUsd: string;
             minTransactionUsd: string;
         };
+        SwapSettlementProgress: {
+            attempt?: number;
+            maxAttempts?: number;
+            refundTxHash?: string;
+            /** Format: date-time */
+            retryAt?: string;
+            /** @enum {string} */
+            stage: "sweeping" | "preparing_bridge" | "bridging" | "retrying_bridge" | "transferring" | "refund_pending" | "refunding" | "refunded" | "recovery_required";
+        };
+        TgbpAmount: string;
+        UsdcAmount: string;
     };
     responses: {
         BadRequest: {
@@ -428,6 +473,22 @@ export interface components {
             };
         };
         Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        InternalServerError: {
             headers: {
                 [name: string]: unknown;
             };
@@ -511,6 +572,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
@@ -587,7 +649,9 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listDeposits: {
@@ -645,8 +709,8 @@ export interface operations {
         parameters: {
             query?: {
                 direction?: components["schemas"]["SwapDirection"];
-                tgbpAmount?: string;
-                usdcAmount?: string;
+                tgbpAmount?: components["schemas"]["DecimalAmount"];
+                usdcAmount?: components["schemas"]["DecimalAmount"];
             };
             header?: never;
             path?: never;
@@ -667,6 +731,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalServerError"];
         };
     };
     getSupportedNetworks: {
@@ -717,8 +782,10 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalServerError"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };
