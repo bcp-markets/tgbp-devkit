@@ -217,6 +217,8 @@ export function createTgbpPaymentFetch({
       url: ledgerUrl(url),
       reason: payment.reason,
     })
+    // Approval can outlast the caller. The ledger keeps the entry, overstating the day's spend.
+    request.signal.throwIfAborted()
 
     const payload = await http.createPaymentPayload({ ...paymentRequired, accepts: [offer] })
     const signed = {
