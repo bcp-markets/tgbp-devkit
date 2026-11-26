@@ -110,7 +110,9 @@ export interface TgbpPaidResponse {
  * never understate it.
  *
  * A cancel before the paid request is sent throws the signal's reason, and
- * nothing leaves the process. Once it is sent, any outcome other than a
+ * nothing leaves the process. The guard gets the signal too: a cancel while it
+ * waits for the owner's approval stops the wait, records nothing, and frees
+ * the queue below for the next call. Once it is sent, any outcome other than a
  * reported settlement throws `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`.
  * Neither proves the payment did not happen: the signature stays valid until
  * `details.deadline`. Retrying before then may pay twice, so check the payer's
@@ -210,15 +212,19 @@ export function createTgbpPaymentFetch({
     // A caller that gave up during the checks gets nothing signed and no ledger entry.
     request.signal.throwIfAborted()
     // Last, so the ledger never records a payment that the checks above refused.
-    await guard.authorize({
-      action: 'x402',
-      chain: token.chain,
-      destination: payTo,
-      amount: formatAmount(amount, token.decimals),
-      url: ledgerUrl(url),
-      reason: payment.reason,
-    })
-    // Approval can outlast the caller. The ledger keeps the entry: it may overstate, never understate.
+    await guard.authorize(
+      {
+        action: 'x402',
+        chain: token.chain,
+        destination: payTo,
+        amount: formatAmount(amount, token.decimals),
+        url: ledgerUrl(url),
+        reason: payment.reason,
+      },
+      request.signal,
+    )
+    // A cancel after the guard recorded the payment signs nothing, and the entry stays: the ledger
+    // may overstate, never understate.
     request.signal.throwIfAborted()
 
     const payload = await http.createPaymentPayload({ ...paymentRequired, accepts: [offer] })

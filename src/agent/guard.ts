@@ -86,8 +86,8 @@ export type ApprovalRequest =
 
 /**
  * Asks a human to approve an action. Resolve `true` only on an explicit yes.
- * The guard aborts `signal` when its wait runs out, and treats the timeout,
- * any other value, and a rejection as a refusal.
+ * The guard aborts `signal` when its wait runs out or the caller cancels, and
+ * treats the timeout, any other value, and a rejection as a refusal.
  */
 export type Approver = (request: ApprovalRequest, signal: AbortSignal) => Promise<boolean>
 
@@ -124,8 +124,12 @@ export interface SpendBudget {
 
 export interface SpendGuard {
   readonly policy: SpendPolicy
-  /** Resolves once the action is allowed and recorded; throws `SPEND_POLICY_DENIED` otherwise. */
-  authorize(request: SpendRequest): Promise<void>
+  /**
+   * Resolves once the action is allowed and recorded; throws `SPEND_POLICY_DENIED` otherwise.
+   * A cancel through `signal` before the action is recorded throws the signal's reason, stops
+   * any wait for approval at once, and records nothing.
+   */
+  authorize(request: SpendRequest, signal?: AbortSignal): Promise<void>
   /** Today's spend against the daily cap. Throws `SPEND_POLICY_DENIED` if the ledger cannot be read. */
   budget(): Promise<SpendBudget>
 }
@@ -217,7 +221,8 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     return undefined
   }
 
-  async function authorize(request: SpendRequest): Promise<void> {
+  async function authorize(request: SpendRequest, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
     checkExpiry(request)
     if (!policy.actions.includes(request.action)) {
       throw denied('actions', `the spend policy does not allow "${request.action}"`, request)
@@ -257,17 +262,22 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     }
     // Check the caps before asking a human, so nobody approves an action that would fail.
     const entries = await readLedger(request)
+    signal?.throwIfAborted()
     const limited = overLimit(request, amount, service, entries, now())
     if (limited) throw limited
 
     if (request.action === 'redeem' && amount > approvalAbove) {
-      const { approved, approverError } = await waitForApproval({
-        action: 'redeem',
-        chain: request.chain,
-        destination,
-        amount: request.amount,
-        threshold: policy.redemptionApprovalAbove,
-      })
+      const { approved, approverError } = await waitForApproval(
+        {
+          action: 'redeem',
+          chain: request.chain,
+          destination,
+          amount: request.amount,
+          threshold: policy.redemptionApprovalAbove,
+        },
+        signal,
+      )
+      signal?.throwIfAborted()
       if (!approved) {
         throw denied(
           'redemptionApprovalAbove',
@@ -287,16 +297,22 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
       service !== undefined &&
       !entries.some((entry) => entry.action === 'x402' && entry.service === service.match)
     ) {
-      const { approved, approverError } = await waitForApproval({
-        action: 'x402',
-        chain: request.chain,
-        destination,
-        amount: request.amount,
-        url: request.url,
-        reason: request.reason,
-        service: service.match,
-        category: service.category,
-      })
+      const { approved, approverError } = await waitForApproval(
+        {
+          action: 'x402',
+          chain: request.chain,
+          destination,
+          amount: request.amount,
+          url: request.url,
+          reason: request.reason,
+          service: service.match,
+          category: service.category,
+        },
+        signal,
+      )
+      // A caller that gave up while the owner decided paid nothing, so it records nothing, and
+      // the service's first payment still needs the owner's approval.
+      signal?.throwIfAborted()
       if (!approved) {
         throw denied(
           'firstPayment',
@@ -327,6 +343,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
           }
         : {}),
     }
+    signal?.throwIfAborted()
     let result: ReserveResult<TgbpKitError>
     try {
       // Again under the ledger lock: another process may have spent since the check above.
@@ -343,21 +360,26 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     if (!result.ok) throw result.refusal
   }
 
+  /** Stops waiting at the timeout or at the caller's cancel, whichever comes first. */
   async function waitForApproval(
     request: ApprovalRequest,
+    signal: AbortSignal | undefined,
   ): Promise<{ approved: boolean; approverError?: string }> {
     const { approver } = options
     if (!approver) return { approved: false, approverError: 'no approver is configured' }
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<false>((resolve) => {
-      timer = setTimeout(() => {
+    let cancel: (() => void) | undefined
+    const stop = new Promise<false>((resolve) => {
+      cancel = () => {
         controller.abort()
         resolve(false)
-      }, approvalTimeoutMs)
+      }
+      timer = setTimeout(cancel, approvalTimeoutMs)
+      signal?.addEventListener('abort', cancel, { once: true })
     })
     try {
-      const answer = await Promise.race([approver(request, controller.signal), timeout])
+      const answer = await Promise.race([approver(request, controller.signal), stop])
       // Only an explicit true approves; a truthy string or object does not.
       if (controller.signal.aborted) {
         return { approved: false, approverError: 'no answer before the timeout' }
@@ -368,6 +390,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
       return { approved: false, approverError: errorMessage(error) }
     } finally {
       clearTimeout(timer)
+      if (cancel) signal?.removeEventListener('abort', cancel)
     }
   }
 
