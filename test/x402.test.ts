@@ -1057,6 +1057,77 @@ describe('createTgbpPaymentFetch', () => {
     expect(fake.calls.settle).toHaveLength(1)
   })
 
+  it('signs nothing for a payment the caller cancels while the owner decides', async () => {
+    const signed: unknown[] = []
+    const counting = {
+      ...payerWallet,
+      signTypedData: (args: never) => {
+        signed.push(args)
+        return payerWallet.signTypedData(args)
+      },
+    } as WalletClient
+    const caller = new AbortController()
+    const owner = createSpendGuard({
+      policy: policy(),
+      ledgerPath,
+      // The caller gives up while the owner is still deciding, and the owner then approves.
+      approver: async () => {
+        caller.abort()
+        return true
+      },
+    })
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: counting,
+      maxPencePerRequest: 10,
+      token,
+      guard: owner,
+    })
+    const error = await fetchPaid(`${server.url}/quote`, { signal: caller.signal }, REASON).catch(
+      (e: unknown) => e,
+    )
+    expect((error as Error).name).toBe('AbortError')
+    expect(signed).toHaveLength(0)
+    expect(fake.calls.verify).toHaveLength(0)
+    // The approved entry stays: the ledger may overstate the day's spend, never understate it.
+    expect(await readFile(ledgerPath, 'utf8')).toContain(`${server.url}/quote`)
+  })
+
+  it('sends nothing for a payment the caller cancels while it is being signed', async () => {
+    const caller = new AbortController()
+    const cancelling = {
+      ...payerWallet,
+      signTypedData: (args: never) => {
+        caller.abort()
+        return payerWallet.signTypedData(args)
+      },
+    } as WalletClient
+    const sent: Request[] = []
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: cancelling,
+      maxPencePerRequest: 10,
+      token,
+      guard,
+      // A fetch that ignores the signal would carry the signed payment out.
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        sent.push(request)
+        return fetch(request.url, {
+          method: request.method,
+          headers: request.headers,
+          redirect: 'manual',
+        })
+      },
+    })
+    const error = await fetchPaid(`${server.url}/quote`, { signal: caller.signal }, REASON).catch(
+      (e: unknown) => e,
+    )
+    expect((error as Error).name).toBe('AbortError')
+    expect(sent.some((request) => request.headers.has('payment-signature'))).toBe(false)
+    expect(fake.calls.verify).toHaveLength(0)
+  })
+
   it('refuses the payment that would pass the daily cap, counting other kit spend', async () => {
     await guard.authorize({
       action: 'transfer',

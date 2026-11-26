@@ -109,11 +109,12 @@ export interface TgbpPaidResponse {
  * then fails stays counted, so the ledger may overstate the day's spend but
  * never understate it.
  *
- * After signing, any outcome other than a reported settlement throws
- * `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`. Neither proves the payment did
- * not happen: the signature stays valid until `details.deadline`. Retrying
- * before then may pay twice, so check the payer's balance or wait for the
- * deadline first.
+ * A cancel before the paid request is sent throws the signal's reason, and
+ * nothing leaves the process. Once it is sent, any outcome other than a
+ * reported settlement throws `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`.
+ * Neither proves the payment did not happen: the signature stays valid until
+ * `details.deadline`. Retrying before then may pay twice, so check the payer's
+ * balance or wait for the deadline first.
  *
  * One returned function makes one payment at a time; concurrent calls wait
  * their turn, because two payments signed at once would share a permit nonce.
@@ -217,6 +218,8 @@ export function createTgbpPaymentFetch({
       url: ledgerUrl(url),
       reason: payment.reason,
     })
+    // Approval can outlast the caller. The ledger keeps the entry: it may overstate, never understate.
+    request.signal.throwIfAborted()
 
     const payload = await http.createPaymentPayload({ ...paymentRequired, accepts: [offer] })
     const signed = {
@@ -236,12 +239,14 @@ export function createTgbpPaymentFetch({
       body: first.body,
       // A redirect would carry the signed payment to wherever it points.
       redirect: 'error',
-      // An abort after signing surfaces as PAYMENT_UNCONFIRMED below.
+      // An abort once the paid request is sent surfaces as PAYMENT_UNCONFIRMED below.
       signal: request.signal,
     })
     for (const [name, value] of Object.entries(http.encodePaymentSignatureHeader(payload))) {
       paid.headers.set(name, value)
     }
+    // A signature that never leaves the process pays nothing, even through a fetch that ignores the signal.
+    request.signal.throwIfAborted()
     let response: Response
     try {
       response = await fetchFn(paid)

@@ -480,7 +480,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     ({ url, maxPence, estimate, reason }, ctx) =>
       asking(ctx, 'firstPayment', () =>
         run(async () => {
-          // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
+          // The client's cancel stops a payment not yet sent; once sent it reports PAYMENT_UNCONFIRMED.
           const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
           // Checked before any request, so the tool never fetches a URL the policy does not list.
           if (matchService(guard.policy.x402?.services ?? [], url) === undefined) {
