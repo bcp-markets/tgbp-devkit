@@ -1265,6 +1265,7 @@ describe('tgbp_x402_pay', () => {
       })
       expect(isError).toBe(true)
       expect(body.message).toContain("the tool's 45-second limit")
+      expect(body.message).toContain("owner's approval")
       expect(body.message).toContain('nothing was paid')
       expect(signTypedData).not.toHaveBeenCalled()
       expect(await ledger()).toBe('')

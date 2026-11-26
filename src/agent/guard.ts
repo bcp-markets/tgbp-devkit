@@ -368,16 +368,12 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
     const { approver } = options
     if (!approver) return { approved: false, approverError: 'no approver is configured' }
     const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let cancel: (() => void) | undefined
     const stop = new Promise<false>((resolve) => {
-      cancel = () => {
-        controller.abort()
-        resolve(false)
-      }
-      timer = setTimeout(cancel, approvalTimeoutMs)
-      signal?.addEventListener('abort', cancel, { once: true })
+      controller.signal.addEventListener('abort', () => resolve(false), { once: true })
     })
+    const cancel = () => controller.abort()
+    const timer = setTimeout(cancel, approvalTimeoutMs)
+    signal?.addEventListener('abort', cancel, { once: true })
     try {
       const answer = await Promise.race([approver(request, controller.signal), stop])
       // Only an explicit true approves; a truthy string or object does not.
@@ -390,7 +386,7 @@ export function createSpendGuard(options: SpendGuardOptions): SpendGuard {
       return { approved: false, approverError: errorMessage(error) }
     } finally {
       clearTimeout(timer)
-      if (cancel) signal?.removeEventListener('abort', cancel)
+      signal?.removeEventListener('abort', cancel)
     }
   }
 

@@ -1126,6 +1126,7 @@ describe('createTgbpPaymentFetch', () => {
     await vi.waitFor(() => expect(asked).toHaveLength(2))
     // The owner's late yes to the cancelled call pays and records nothing.
     answers[0]?.(true)
+    await new Promise((resolve) => setImmediate(resolve))
     expect(await readFile(ledgerPath, 'utf8').catch(() => '')).toBe('')
     expect(fake.calls.verify).toHaveLength(0)
 

@@ -481,7 +481,8 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       asking(ctx, 'firstPayment', () =>
         run(async () => {
           // The client's cancel stops a payment not yet sent; once sent it reports PAYMENT_UNCONFIRMED.
-          const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
+          const limit = AbortSignal.timeout(X402_TIMEOUT_MS)
+          const signal = AbortSignal.any([ctx.mcpReq.signal, limit])
           // Checked before any request, so the tool never fetches a URL the policy does not list.
           if (matchService(guard.policy.x402?.services ?? [], url) === undefined) {
             // Origin and path only, as the guard reports it: the query may carry secrets.
@@ -526,7 +527,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           const { decimals } = (await loadX402()).TGBP_BASE_SEPOLIA
           const pay = await x402PaymentFetch()
           const paid = await pay(url, { signal }, { reason, maxPence }).catch((error: unknown) => {
-            throw cancelledPayment(error, signal, ctx.mcpReq.signal)
+            throw pastTimeLimit(error, limit)
           })
           const status = paid.response.status
           if (!paid.settlement || paid.amount === undefined) {
@@ -644,17 +645,14 @@ async function loadX402(): Promise<X402Client> {
 }
 
 /**
- * A cancel before the paid request is sent throws the signal's bare reason, which tells the
- * agent nothing; this says what stopped the call. Any other error passes through unchanged.
+ * The tool's time limit stops a payment not yet sent with the timer's bare reason, which tells
+ * the agent nothing; this says what stopped it. Any other error, a client's cancel included,
+ * passes through: a client that cancelled reads no result.
  */
-function cancelledPayment(error: unknown, signal: AbortSignal, client: AbortSignal): unknown {
-  if (!signal.aborted || error !== signal.reason) return error
-  const cause =
-    client.aborted && error === client.reason
-      ? 'the client cancelled the call'
-      : `the call ran past the tool's ${X402_TIMEOUT_MS / 1000}-second limit, and a first payment to a service waits for the owner's approval, which can take longer`
+function pastTimeLimit(error: unknown, limit: AbortSignal): unknown {
+  if (!limit.aborted || error !== limit.reason) return error
   return new Error(
-    `The payment was cancelled before anything was signed or sent, so nothing was paid: ${cause}. Call the tool again to retry.`,
+    `The payment ran past the tool's ${X402_TIMEOUT_MS / 1000}-second limit and was cancelled before it was sent, so nothing was paid. A first payment to a service waits for the owner's approval, which can take that long. Call the tool again to retry.`,
     { cause: error },
   )
 }
