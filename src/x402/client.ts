@@ -109,11 +109,12 @@ export interface TgbpPaidResponse {
  * then fails stays counted, so the ledger may overstate the day's spend but
  * never understate it.
  *
- * After signing, any outcome other than a reported settlement throws
- * `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`. Neither proves the payment did
- * not happen: the signature stays valid until `details.deadline`. Retrying
- * before then may pay twice, so check the payer's balance or wait for the
- * deadline first.
+ * A cancel before the paid request is sent throws the signal's reason, and
+ * nothing leaves the process. Once it is sent, any outcome other than a
+ * reported settlement throws `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED`.
+ * Neither proves the payment did not happen: the signature stays valid until
+ * `details.deadline`. Retrying before then may pay twice, so check the payer's
+ * balance or wait for the deadline first.
  *
  * One returned function makes one payment at a time; concurrent calls wait
  * their turn, because two payments signed at once would share a permit nonce.

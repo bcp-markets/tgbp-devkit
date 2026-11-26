@@ -513,8 +513,9 @@ permit nonce.
 returns the tGBP offer's `amount` in base units, `payTo` and `network`, or `free: true` when the
 route does not answer 402. It signs nothing and does not ask the spend guard.
 
-After it signs, the client throws `PAYMENT_REFUSED` or `PAYMENT_UNCONFIRMED` for any outcome other
-than a reported settlement. **Neither proves the payment did not happen.** The signature can still
+A cancel before the paid request goes out throws the signal's reason, and nothing leaves the
+process. Once the paid request is sent, the client throws `PAYMENT_REFUSED` or
+`PAYMENT_UNCONFIRMED` for any outcome other than a reported settlement. **Neither proves the payment did not happen.** The signature can still
 settle until `error.details.deadline` (Unix seconds). Check the payer's balance, or wait for the
 deadline, before you retry. A retry before then may pay twice. The `settlement` the client returns
 is what the facilitator reported, so read its transaction receipt before you treat it as final.
