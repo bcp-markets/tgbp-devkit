@@ -35,6 +35,8 @@ const chain = vi.hoisted(() => ({
   getBalance: vi.fn(async () => ({ amount: 12_500_000_000_000_000_000n, decimals: 18 })),
 }))
 vi.mock('../src/evm/index.js', () => chain)
+/** The x402 wallet's signer: a signature is a payment attempt. */
+const signTypedData = vi.fn(async () => `0x${'11'.repeat(65)}`)
 
 const AGENT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
 const BURN = '0x000000000000000000000000000000000000dEaD'
@@ -171,35 +173,69 @@ async function connect(
   return client
 }
 
+/** How a 2026-07-28 test client's human answers an approval question. */
+type ModernAnswer = 'approve' | 'decline' | 'cancel'
+
+/** What the server had done when the human was asked: nothing may be sent, signed or recorded yet. */
+interface AskedAt {
+  message: string
+  apiCalls: number
+  transfers: number
+  signatures: number
+  ledger: string
+}
+
+/**
+ * Answers the server's approval questions, and notes what it had done by
+ * each one, in `asked`.
+ */
+function answering(client: Client, answer: ModernAnswer, asked: AskedAt[]) {
+  client.setRequestHandler('elicitation/create', async (request) => {
+    asked.push({
+      message: String((request.params as { message?: unknown }).message),
+      apiCalls: api.redemptions.create.mock.calls.length + api.mints.create.mock.calls.length,
+      transfers: chain.transfer.mock.calls.length,
+      signatures: signTypedData.mock.calls.length,
+      ledger: await readFile(join(dir, 'ledger.jsonl'), 'utf8').catch(() => ''),
+    })
+    if (answer === 'approve') return { action: 'accept', content: { approve: true } }
+    return { action: answer }
+  })
+}
+
 /** A client pinned to protocol 2026-07-28, served over in-process HTTP as a remote host would serve it. */
-async function connectModern(options: { elicit?: boolean } = {}) {
-  const handler = createMcpHandler(() => createServer())
+async function connectModern(
+  options: { answer?: ModernAnswer; server?: Partial<TgbpMcpServerOptions> } = {},
+) {
+  const handler = createMcpHandler(() => createServer(options.server))
+  const responses: unknown[] = []
+  const asked: AskedAt[] = []
   const client = new Client(
     { name: 'test', version: '0' },
     {
       versionNegotiation: { mode: { pin: '2026-07-28' } },
-      capabilities: options.elicit ? { elicitation: {} } : {},
+      capabilities: options.answer ? { elicitation: {} } : {},
     },
   )
-  if (options.elicit) {
-    client.setRequestHandler('elicitation/create', async () => ({
-      action: 'accept',
-      content: { approve: true },
-    }))
-  }
+  if (options.answer) answering(client, options.answer, asked)
   await client.connect(
     new StreamableHTTPClientTransport(new URL('http://test.local/mcp'), {
-      fetch: (url, init) => handler.fetch(new Request(url, init)),
+      fetch: async (url, init) => {
+        const res = await handler.fetch(new Request(url, init))
+        responses.push(...parseMessages(await res.clone().text()))
+        return res
+      },
     }),
   )
   clients.push(client)
-  return client
+  return Object.assign(client, { responses, asked })
 }
 
 /** The tgbp-mcp entry point: serveStdio, here over an in-memory pipe in place of the process's stdio. */
-async function connectStdio(options: { modern?: boolean } = {}) {
+async function connectStdio(options: { modern?: boolean; answer?: ModernAnswer } = {}) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
   serveStdio(() => createServer(), { transport: serverSide })
+  const asked: AskedAt[] = []
   const client = new Client(
     { name: 'test', version: '0' },
     {
@@ -207,13 +243,48 @@ async function connectStdio(options: { modern?: boolean } = {}) {
       ...(options.modern ? { versionNegotiation: { mode: { pin: '2026-07-28' as const } } } : {}),
     },
   )
-  client.setRequestHandler('elicitation/create', async () => ({
-    action: 'accept',
-    content: { approve: true },
-  }))
+  answering(client, options.answer ?? 'approve', asked)
   await client.connect(clientSide)
   clients.push(client)
-  return client
+  return Object.assign(client, { asked })
+}
+
+/** One `tgbp_redeem` round by hand; with `requestState`, it answers yes to the approval question. */
+async function round(
+  client: Client,
+  args: Record<string, unknown>,
+  requestState?: string,
+  answer: unknown = { action: 'accept', content: { approve: true } },
+  name = 'tgbp_redeem',
+) {
+  const params = {
+    name,
+    arguments: args,
+    ...(requestState === undefined
+      ? {}
+      : {
+          requestState,
+          inputResponses: { approval: answer },
+        }),
+  }
+  // The SDK types no inputResponses on callTool; the manual multi-round path still sends them.
+  const result = await client.callTool(params as Parameters<Client['callTool']>[0], {
+    allowInputRequired: true,
+  })
+  return result as typeof result & { resultType?: string; requestState?: string }
+}
+
+/** A tool result's JSON body. */
+function textOf(result: { content?: unknown }) {
+  const [first] = (result.content ?? []) as { text: string }[]
+  return { body: JSON.parse(first?.text ?? 'null') }
+}
+
+/** The `input_required` results the server sent. */
+function inputRequiredResults(responses: unknown[]) {
+  return responses
+    .map((message) => (message as { result?: Record<string, unknown> }).result)
+    .filter((result) => result?.resultType === 'input_required')
 }
 
 async function call(client: Client, name: string, args: Record<string, unknown>) {
@@ -354,19 +425,119 @@ describe('redemption over the approval threshold', () => {
     expectNothingSent()
   })
 
-  it.each([
-    ['cannot ask', false],
-    ['can ask', true],
-  ])(
-    'is refused before any signing or API call on a 2026-07-28 connection whose client %s',
-    async (_, elicit) => {
-      const { body } = await call(await connectModern({ elicit }), 'tgbp_redeem', redeem)
+  it('is refused before any signing or API call on a 2026-07-28 connection whose client cannot ask', async () => {
+    const client = await connectModern()
+    const { body } = await call(client, 'tgbp_redeem', redeem)
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details.rule).toBe('redemptionApprovalAbove')
+    expect(body.details.approverError).toMatch(/does not declare elicitation/)
+    expect(inputRequiredResults(client.responses)).toEqual([])
+    expectNothingSent()
+  })
+
+  it('asks through input_required on a 2026-07-28 connection, and redeems once the human approves', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const { isError, body } = await call(client, 'tgbp_redeem', redeem)
+    expect(isError).toBe(false)
+    expect(body.burnHash).toBe('0xburn')
+    const [question] = inputRequiredResults(client.responses)
+    expect(question).toMatchObject({
+      inputRequests: { approval: { method: 'elicitation/create' } },
+      requestState: expect.any(String),
+    })
+    // Asked once, before anything was sent, burned or recorded.
+    expect(client.asked).toEqual([
+      {
+        message: expect.stringContaining('redeem 80 tGBP'),
+        apiCalls: 0,
+        transfers: 0,
+        signatures: 0,
+        ledger: '',
+      },
+    ])
+    expect(api.redemptions.create).toHaveBeenCalledTimes(1)
+    expect(chain.transfer).toHaveBeenCalledTimes(1)
+    expect((await readFile(join(dir, 'ledger.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(1)
+  })
+
+  it.each(['decline', 'cancel'] as const)(
+    'is refused on a 2026-07-28 connection when the human answers %s',
+    async (answer) => {
+      const client = await connectModern({ answer })
+      const { body } = await call(client, 'tgbp_redeem', redeem)
       expect(body.code).toBe('SPEND_POLICY_DENIED')
       expect(body.details.rule).toBe('redemptionApprovalAbove')
-      if (elicit) expect(body.details.approverError).toMatch(/cannot carry the question/)
+      expect(client.asked).toHaveLength(1)
       expectNothingSent()
+      expect(await readFile(join(dir, 'ledger.jsonl'), 'utf8').catch(() => '')).toBe('')
     },
   )
+
+  it('counts an approval once: the same answer sent again asks again', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const first = await round(client, redeem)
+    expect(first.resultType).toBe('input_required')
+    const approved = await round(client, redeem, first.requestState)
+    expect(approved.isError).toBeFalsy()
+    const replayed = await round(client, redeem, first.requestState)
+    expect(replayed.resultType).toBe('input_required')
+    expect(api.redemptions.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks again when the answer was to a different redemption', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const first = await round(client, { ...redeem, amount: '60' })
+    const other = await round(client, redeem, first.requestState)
+    expect(other.resultType).toBe('input_required')
+    expectNothingSent()
+  })
+
+  it('refuses an answer to a question this server never asked', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const { body } = textOf(await round(client, redeem, 'forged'))
+    expect(body.details.rule).toBe('redemptionApprovalAbove')
+    expect(body.details.approverError).toMatch(/not to a question this server asked/)
+    expectNothingSent()
+  })
+
+  it('refuses a malformed answer as a broken client, never as a no, and keeps the question open', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const first = await round(client, redeem)
+    const broken = textOf(await round(client, redeem, first.requestState, { action: 'accept' }))
+    expect(broken.body.details.approverError).toMatch(/something other than the approval form/)
+    expectNothingSent()
+    // The broken answer did not use the question up: a real answer to it still counts.
+    const approved = await round(client, redeem, first.requestState)
+    expect(approved.isError).toBeFalsy()
+    expect(api.redemptions.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses an answer sent without its requestState', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const params = {
+      name: 'tgbp_redeem',
+      arguments: redeem,
+      inputResponses: { approval: { action: 'accept', content: { approve: true } } },
+    }
+    const result = await client.callTool(params as Parameters<Client['callTool']>[0], {
+      allowInputRequired: true,
+    })
+    expect(textOf(result).body.details.approverError).toMatch(/without its question's requestState/)
+    expectNothingSent()
+  })
+
+  it('refuses an answer that comes back after the approval timeout', async () => {
+    const client = await connectModern({ answer: 'approve', server: { approvalTimeoutMs: 1000 } })
+    const first = await round(client, redeem)
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 5_000 })
+    try {
+      const { body } = textOf(await round(client, redeem, first.requestState))
+      expect(body.details.approverError).toMatch(/^no answer before the timeout/)
+    } finally {
+      vi.useRealTimers()
+    }
+    expectNothingSent()
+  })
 
   it('is refused when the human declines', async () => {
     const { body } = await call(await connect({ elicit: 'decline' }), 'tgbp_redeem', redeem)
@@ -406,14 +577,47 @@ describe('redemption over the approval threshold', () => {
     expect(body.burnHash).toBe('0xburn')
   })
 
-  it('is refused over stdio on a 2026-07-28 connection, and says why', async () => {
+  it('asks over stdio on a 2026-07-28 connection, and redeems once the human approves', async () => {
     const client = await connectStdio({ modern: true })
     expect(client.getProtocolEra()).toBe('modern')
-    const { body } = await call(client, 'tgbp_redeem', redeem)
-    expect(body.code).toBe('SPEND_POLICY_DENIED')
-    expect(body.details.approverError).toMatch(/cannot carry the question/)
-    expectNothingSent()
+    const { isError, body } = await call(client, 'tgbp_redeem', redeem)
+    expect(isError).toBe(false)
+    expect(body.burnHash).toBe('0xburn')
+    expect(client.asked).toEqual([
+      {
+        message: expect.stringContaining('redeem 80 tGBP'),
+        apiCalls: 0,
+        transfers: 0,
+        signatures: 0,
+        ledger: '',
+      },
+    ])
   })
+
+  it('keeps two calls apart on one 2026-07-28 stdio connection: each asks, each redeems once', async () => {
+    const client = await connectStdio({ modern: true })
+    const results = await Promise.all([
+      call(client, 'tgbp_redeem', { ...redeem, reference: 'first' }),
+      call(client, 'tgbp_redeem', { ...redeem, reference: 'second' }),
+    ])
+    expect(results.map((r) => r.isError)).toEqual([false, false])
+    expect(client.asked).toHaveLength(2)
+    expect(api.redemptions.create).toHaveBeenCalledTimes(2)
+    expect(chain.transfer).toHaveBeenCalledTimes(2)
+    expect((await readFile(join(dir, 'ledger.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(2)
+  })
+
+  it.each(['decline', 'cancel'] as const)(
+    'is refused over stdio on a 2026-07-28 connection when the human answers %s',
+    async (answer) => {
+      const client = await connectStdio({ modern: true, answer })
+      const { body } = await call(client, 'tgbp_redeem', redeem)
+      expect(body.details.rule).toBe('redemptionApprovalAbove')
+      expect(client.asked).toHaveLength(1)
+      expectNothingSent()
+      expect(await readFile(join(dir, 'ledger.jsonl'), 'utf8').catch(() => '')).toBe('')
+    },
+  )
 })
 
 describe('redemption checks after the API answers', () => {
@@ -708,7 +912,6 @@ describe('tgbp_x402_pay', () => {
 
   let fake: ReturnType<typeof fakeFacilitator>
   let paid: Awaited<ReturnType<typeof serve>>
-  const signTypedData = vi.fn(async () => `0x${'11'.repeat(65)}`)
   /** The wallet the tool pays from: every read passes, and a signature is a payment attempt. */
   const x402Evm = () => ({
     publicClient: {
@@ -900,6 +1103,68 @@ describe('tgbp_x402_pay', () => {
       .map((line) => JSON.parse(line))
     expect(first).toMatchObject({ firstPayment: true, category: 'quotes' })
     expect(second.firstPayment).toBeUndefined()
+  })
+
+  /** A 2026-07-28 client whose human answers the first-payment question with `answer`. */
+  const connectX402Modern = (answer: ModernAnswer) =>
+    connectModern({
+      answer,
+      server: {
+        policy: x402Policy(),
+        evm: x402Evm as unknown as NonNullable<TgbpMcpServerOptions['evm']>,
+      },
+    })
+  const quote = () => ({ url: `${paid.url}/quote`, maxPence: 5, reason: 'a quote for the user' })
+
+  it('asks through input_required on a 2026-07-28 connection, and pays once the human approves', async () => {
+    const client = await connectX402Modern('approve')
+    const { isError, body } = await call(client, 'tgbp_x402_pay', quote())
+    expect(isError).toBe(false)
+    expect(body.paid.transaction).toBe(SETTLE_HASH)
+    expect(inputRequiredResults(client.responses)).toHaveLength(1)
+    // Asked once, before anything was signed or recorded.
+    expect(client.asked).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining('its first payment to the x402 service'),
+        signatures: 0,
+        ledger: '',
+      }),
+    ])
+    expect(fake.calls.settle).toHaveLength(1)
+    const entries = (await ledger()).trim().split('\n')
+    expect(entries).toHaveLength(1)
+    expect(JSON.parse(entries[0] ?? '{}')).toMatchObject({ firstPayment: true })
+  })
+
+  it.each(['decline', 'cancel'] as const)(
+    'refuses the first payment on a 2026-07-28 connection when the human answers %s, and signs nothing',
+    async (answer) => {
+      const client = await connectX402Modern(answer)
+      const { isError, body } = await call(client, 'tgbp_x402_pay', quote())
+      expect(isError).toBe(true)
+      expect(body.details.rule).toBe('firstPayment')
+      expect(client.asked).toHaveLength(1)
+      expect(signTypedData).not.toHaveBeenCalled()
+      expect(fake.calls.verify).toHaveLength(0)
+      expect(await ledger()).toBe('')
+    },
+  )
+
+  it("keeps a human's no even when another call paid the service first between the rounds", async () => {
+    const client = await connectX402Modern('approve')
+    const first = await round(client, quote(), undefined, undefined, 'tgbp_x402_pay')
+    expect(first.resultType).toBe('input_required')
+    // Another call is approved and pays, so the policy no longer needs to ask.
+    expect((await call(client, 'tgbp_x402_pay', quote())).isError).toBe(false)
+    const declined = await round(
+      client,
+      quote(),
+      first.requestState,
+      { action: 'decline' },
+      'tgbp_x402_pay',
+    )
+    expect(textOf(declined).body.details).toMatchObject({ rule: 'firstPayment', declined: true })
+    expect(fake.calls.settle).toHaveLength(1)
   })
 
   it('refuses a URL on no listed service, and signs nothing', async () => {

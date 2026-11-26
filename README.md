@@ -263,8 +263,13 @@ on its own: if a process dies holding `<ledger>.lock`, actions are refused until
 client ([elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)).
 A "no", no answer before the timeout, and a client that cannot ask all refuse it. A timeout never
 approves. The threshold applies to each redemption; the daily cap bounds what several smaller
-ones can add up to. For now the server asks only on a 2025-era connection, so a client on protocol
-2026-07-28 is refused as one that cannot ask.
+ones can add up to. On a 2025-era connection the server asks in the middle of the call. On protocol
+2026-07-28 the call returns `input_required` instead, and nothing is signed, sent or counted until
+the client calls again with the human's answer. That answer approves only the action it was asked
+about, counts once, and is refused once the approval timeout has passed. The same process must
+receive both rounds, so a host that spreads one connection's calls across processes cannot approve.
+On either protocol the server trusts the MCP client to pass on the human's answer: use a client
+that asks the human itself, never one that lets the agent answer.
 
 The transfer, mint, redeem, swap and x402 pay tools carry
 `_meta["anthropic/requiresUserInteraction"]: true`, so a client that honours it asks the human
