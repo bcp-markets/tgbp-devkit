@@ -447,7 +447,7 @@ describe('agent skills', () => {
   it('reads no file outside the served skills', async () => {
     const client = await connect()
     for (const uri of ['skill://constructor', 'skill://tgbp-build-integration/README.md']) {
-      await expect(client.readResource({ uri })).rejects.toThrow()
+      await expect(client.readResource({ uri })).rejects.toThrow(/not found/i)
     }
   })
 })
