@@ -482,17 +482,25 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         run(async () => {
           // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
           const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
+          // Checked before any request, so the tool never fetches a URL the policy does not list.
+          if (matchService(guard.policy.x402?.services ?? [], url) === undefined) {
+            throw new TgbpKitError(
+              'SPEND_POLICY_DENIED',
+              `Spend policy refused x402: ${url} is not an approved x402 service`,
+              { details: { action: 'x402', url, rule: 'services' } },
+            )
+          }
           if (estimate) {
-            // Checked before any request, so an estimate cannot read a URL the policy does not list.
-            if (matchService(guard.policy.x402?.services ?? [], url) === undefined) {
+            const x402 = await loadX402()
+            // A redirect could lead the estimate to a URL the policy does not list, so it is not followed.
+            const quote = await x402.quoteTgbpPayment(url, { signal, redirect: 'manual' })
+            if (quote.free && quote.status >= 300 && quote.status < 400) {
               throw new TgbpKitError(
-                'SPEND_POLICY_DENIED',
-                `Spend policy refused x402: ${url} is not an approved x402 service`,
-                { details: { action: 'x402', url, rule: 'services' } },
+                'PAYMENT_NOT_OFFERED',
+                `${url} answered with a redirect (${quote.status}); an estimate does not follow redirects`,
+                { details: { url, status: quote.status } },
               )
             }
-            const x402 = await loadX402()
-            const quote = await x402.quoteTgbpPayment(url, { signal })
             if (quote.free) return { estimate: true, ...quote }
             const token = x402.TGBP_BASE_SEPOLIA
             return {
