@@ -525,7 +525,9 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           }
           const { decimals } = (await loadX402()).TGBP_BASE_SEPOLIA
           const pay = await x402PaymentFetch()
-          const paid = await pay(url, { signal }, { reason, maxPence })
+          const paid = await pay(url, { signal }, { reason, maxPence }).catch((error: unknown) => {
+            throw cancelledPayment(error, signal, ctx.mcpReq.signal)
+          })
           const status = paid.response.status
           if (!paid.settlement || paid.amount === undefined) {
             // Only paid content comes back, so the tool is no proxy for reading other URLs.
@@ -639,6 +641,22 @@ async function loadX402(): Promise<X402Client> {
       { cause },
     )
   }
+}
+
+/**
+ * A cancel before the paid request is sent throws the signal's bare reason, which tells the
+ * agent nothing; this says what stopped the call. Any other error passes through unchanged.
+ */
+function cancelledPayment(error: unknown, signal: AbortSignal, client: AbortSignal): unknown {
+  if (!signal.aborted || error !== signal.reason) return error
+  const cause =
+    client.aborted && error === client.reason
+      ? 'the client cancelled the call'
+      : `the call ran past the tool's ${X402_TIMEOUT_MS / 1000}-second limit, and a first payment to a service waits for the owner's approval, which can take longer`
+  return new Error(
+    `The payment was cancelled before anything was signed or sent, so nothing was paid: ${cause}. Call the tool again to retry.`,
+    { cause: error },
+  )
 }
 
 async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {

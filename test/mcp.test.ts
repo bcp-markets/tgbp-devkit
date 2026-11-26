@@ -1245,6 +1245,34 @@ describe('tgbp_x402_pay', () => {
     expect(await ledger()).toBe('')
   })
 
+  it('names the time limit when a payment runs out of time while the owner decides, and records nothing', async () => {
+    // The tool's 45-second limit, ended by the test once the owner has been asked.
+    const limit = new AbortController()
+    const timeout = AbortSignal.timeout.bind(AbortSignal)
+    const spy = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((ms) => (ms === 45_000 ? limit.signal : timeout(ms)))
+    try {
+      const client = await connectX402(x402Policy(), 'never')
+      client.setRequestHandler('elicitation/create', () => {
+        limit.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+        return new Promise(() => {})
+      })
+      const { isError, body } = await call(client, 'tgbp_x402_pay', {
+        url: `${paid.url}/quote`,
+        maxPence: 5,
+        reason: 'a quote for the user',
+      })
+      expect(isError).toBe(true)
+      expect(body.message).toContain("the tool's 45-second limit")
+      expect(body.message).toContain('nothing was paid')
+      expect(signTypedData).not.toHaveBeenCalled()
+      expect(await ledger()).toBe('')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('asks only before the first payment to a service', async () => {
     const quote = { url: `${paid.url}/quote`, maxPence: 5, reason: 'a quote for the user' }
     expect((await call(await connectX402(), 'tgbp_x402_pay', quote)).isError).toBe(false)
