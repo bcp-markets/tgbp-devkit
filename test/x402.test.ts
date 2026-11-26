@@ -782,11 +782,44 @@ describe('createTgbpPaymentFetch', () => {
     return { sent, pay: (input: string, init?: RequestInit) => fetchPaid(input, init, REASON) }
   }
 
-  it('refuses a redirect whose target the fetch hides', async () => {
-    const { sent, pay } = payOver(() => Response.error())
-    await expect(pay(`${server.url}/quote`)).rejects.toMatchObject({ code: 'PAYMENT_NOT_OFFERED' })
+  /** What a spec fetch answers a manual redirect with: no status and no target. */
+  const opaqueRedirect = () => {
+    const response = new Response(null)
+    Object.defineProperty(response, 'type', { value: 'opaqueredirect' })
+    Object.defineProperty(response, 'status', { value: 0 })
+    return response
+  }
+
+  it.each([
+    ['a redirect whose target the fetch hides', opaqueRedirect, /hides/],
+    ['a network error response', () => Response.error(), /failed/],
+    [
+      'an answer the fetch followed a redirect to',
+      () => {
+        const response = new Response('elsewhere', { status: 402 })
+        Object.defineProperty(response, 'url', { value: 'http://unlisted.test/quote' })
+        return response
+      },
+      /another URL/,
+    ],
+  ])('refuses %s', async (_, answer, message) => {
+    const { sent, pay } = payOver(answer)
+    const error = await pay(`${server.url}/quote`).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'PAYMENT_NOT_OFFERED')).toBe(true)
+    expect((error as Error).message).toMatch(message)
     expect(sent).toHaveLength(1)
     expect(fake.calls.verify).toHaveLength(0)
+  })
+
+  it.each([
+    ['error', 'rejects', undefined],
+    ['manual', 'returns', 302],
+  ] as const)("keeps the caller's redirect: '%s'", async (mode, outcome, status) => {
+    const { sent, pay } = payOver(() => Response.redirect(`${server.url}/quote`, 302))
+    const result = pay(`${server.url}/start`, { redirect: mode })
+    if (outcome === 'rejects') await expect(result).rejects.toThrow(TypeError)
+    else expect((await result).response.status).toBe(status)
+    expect(sent).toHaveLength(1)
   })
 
   it('stops following a listed service that keeps redirecting', async () => {

@@ -1164,6 +1164,9 @@ describe('tgbp_x402_pay', () => {
     expect(body).toMatchObject({ status: 200, body: '{"quote":"paid"}' })
     expect(body.paid).toMatchObject({ amount: '0.05', payTo: PAY_TO })
     expect(fake.calls.settle).toHaveLength(1)
+    // The ledger records the URL that asked for payment.
+    const [entry] = (await ledger()).trim().split('\n')
+    expect(JSON.parse(entry ?? '{}')).toMatchObject({ action: 'x402', url: `${paid.url}/quote` })
   })
 
   it('refuses a payment redirected to a path its listed service does not cover', async () => {
