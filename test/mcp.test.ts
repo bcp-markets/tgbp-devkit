@@ -255,9 +255,10 @@ async function round(
   args: Record<string, unknown>,
   requestState?: string,
   answer: unknown = { action: 'accept', content: { approve: true } },
+  name = 'tgbp_redeem',
 ) {
   const params = {
-    name: 'tgbp_redeem',
+    name,
     arguments: args,
     ...(requestState === undefined
       ? {}
@@ -1148,6 +1149,23 @@ describe('tgbp_x402_pay', () => {
       expect(await ledger()).toBe('')
     },
   )
+
+  it("keeps a human's no even when another call paid the service first between the rounds", async () => {
+    const client = await connectX402Modern('approve')
+    const first = await round(client, quote(), undefined, undefined, 'tgbp_x402_pay')
+    expect(first.resultType).toBe('input_required')
+    // Another call is approved and pays, so the policy no longer needs to ask.
+    expect((await call(client, 'tgbp_x402_pay', quote())).isError).toBe(false)
+    const declined = await round(
+      client,
+      quote(),
+      first.requestState,
+      { action: 'decline' },
+      'tgbp_x402_pay',
+    )
+    expect(textOf(declined).body.details).toMatchObject({ rule: 'firstPayment', declined: true })
+    expect(fake.calls.settle).toHaveLength(1)
+  })
 
   it('refuses a URL on no listed service, and signs nothing', async () => {
     const policy = x402Policy()

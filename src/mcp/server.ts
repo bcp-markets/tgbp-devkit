@@ -37,7 +37,7 @@ import type { SpendPolicy } from '../agent/policy.js'
 import { SubmissionJournal } from '../agent/submissions.js'
 import { formatAmount } from '../amount.js'
 import { readCapped } from '../body.js'
-import { isTgbpKitError } from '../errors.js'
+import { isTgbpKitError, TgbpKitError } from '../errors.js'
 import { KIT_VERSION } from '../version.js'
 import {
   acceptsTask,
@@ -123,6 +123,8 @@ interface ApprovalState {
   /** Names the exact action asked about, so the answer approves that action alone. */
   digest: string
   nonce: string
+  /** When the state expires, in ms since the epoch: the nonce is kept until then. */
+  expiresAt: number
 }
 
 /** One tool call that may ask for approval. */
@@ -145,9 +147,10 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   registerTaskHandlers(server, taskStore)
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
   // An answer that comes after the 2025-era wait would end is refused, as that wait refuses it.
+  const approvalStateTtlMs = Math.max(1, Math.ceil(approvalTimeoutMs / 1000)) * 1000
   const approvalState = createRequestStateCodec<ApprovalState>({
     key: APPROVAL_STATE_KEY,
-    ttlSeconds: Math.max(1, Math.ceil(approvalTimeoutMs / 1000)),
+    ttlSeconds: approvalStateTtlMs / 1000,
     bind: (ctx) => `${ctx.mcpReq.method}\0${ctx.http?.authInfo?.clientId ?? ''}`,
   })
   // The guard asks its approver in the middle of an action; this says which call it is.
@@ -193,7 +196,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         const approve = humanAnswer(answer)
         // The guard stopped waiting: a late answer must not be spent on a refusal.
         if (signal.aborted) return false
-        if (claimAnswer(state.nonce, approvalTimeoutMs)) return approve
+        if (claimAnswer(state.nonce, state.expiresAt)) return approve
       }
     }
     const capabilities = envelope(ctx)[CLIENT_CAPABILITIES_META_KEY] as
@@ -212,8 +215,22 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
    */
   async function asking(
     ctx: ServerContext,
+    rule: 'redemptionApprovalAbove' | 'firstPayment',
     fn: () => Promise<CallToolResult>,
   ): Promise<CallToolResult | InputRequiredResult> {
+    // A human's "no" refuses the call even if, by now, the policy would not ask:
+    // say another call paid the service its first payment between the rounds.
+    if (saysNo(ctx.mcpReq.inputResponses?.[APPROVAL_INPUT])) {
+      return failure(
+        new TgbpKitError(
+          'SPEND_POLICY_DENIED',
+          'Spend policy refused this call: the human said no',
+          {
+            details: { rule, declined: true },
+          },
+        ),
+      )
+    }
     const call: ApprovalCall = { ctx }
     const result = await approvalCalls.run(call, fn)
     // Only the refusal that the question caused becomes the question.
@@ -224,7 +241,10 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       inputRequests: {
         [APPROVAL_INPUT]: inputRequired.elicit({ message, requestedSchema: schema }),
       },
-      requestState: await approvalState.mint({ digest, nonce: randomUUID() }, ctx),
+      requestState: await approvalState.mint(
+        { digest, nonce: randomUUID(), expiresAt: Date.now() + approvalStateTtlMs },
+        ctx,
+      ),
     })
   }
 
@@ -376,7 +396,8 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       annotations: { destructiveHint: true, openWorldHint: true },
       _meta: REQUIRES_USER_INTERACTION,
     },
-    (args, ctx) => asking(ctx, () => submit(ctx, () => actions.prepare.redeem(args))),
+    (args, ctx) =>
+      asking(ctx, 'redemptionApprovalAbove', () => submit(ctx, () => actions.prepare.redeem(args))),
   )
 
   server.registerTool(
@@ -455,7 +476,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
       _meta: REQUIRES_USER_INTERACTION,
     },
     ({ url, maxPence, estimate, reason }, ctx) =>
-      asking(ctx, () =>
+      asking(ctx, 'firstPayment', () =>
         run(async () => {
           // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
           const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
@@ -561,15 +582,25 @@ function envelope(ctx: ServerContext): Record<string, unknown> {
 }
 
 /** Records the answer to one approval question; false if it was already used. */
-function claimAnswer(nonce: string, ttlMs: number): boolean {
+function claimAnswer(nonce: string, expiresAt: number): boolean {
   const now = Date.now()
   for (const [used, expires] of answeredApprovals) {
     if (expires <= now) answeredApprovals.delete(used)
   }
   if (answeredApprovals.has(nonce)) return false
   // Kept past the requestState's own expiry, so the codec refuses it first.
-  answeredApprovals.set(nonce, now + ttlMs + 60_000)
+  answeredApprovals.set(nonce, expiresAt + 60_000)
   return true
+}
+
+/** True for a well-formed "no": a decline, a cancel, or the form answered false. */
+function saysNo(answer: unknown): boolean {
+  try {
+    return answer !== undefined && !humanAnswer(answer)
+  } catch {
+    // A malformed answer is no "no"; the approver refuses it with its reason if asked.
+    return false
+  }
 }
 
 /** The x402 packages are optional peers, so the client loads on first use. */
