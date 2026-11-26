@@ -762,6 +762,56 @@ describe('createTgbpPaymentFetch', () => {
     }
   })
 
+  /** A payment fetch over a fake fetch that answers each request with `answer`, recording them. */
+  const payOver = (answer: (request: Request) => Response) => {
+    const sent: Request[] = []
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: payerWallet,
+      maxPencePerRequest: 10,
+      token,
+      guard,
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        sent.push(request)
+        return answer(request)
+      },
+    })
+    return { sent, pay: (input: string, init?: RequestInit) => fetchPaid(input, init, REASON) }
+  }
+
+  it('refuses a redirect whose target the fetch hides', async () => {
+    const { sent, pay } = payOver(() => Response.error())
+    await expect(pay(`${server.url}/quote`)).rejects.toMatchObject({ code: 'PAYMENT_NOT_OFFERED' })
+    expect(sent).toHaveLength(1)
+    expect(fake.calls.verify).toHaveLength(0)
+  })
+
+  it('stops following a listed service that keeps redirecting', async () => {
+    const { sent, pay } = payOver(() => Response.redirect(`${server.url}/loop`, 302))
+    await expect(pay(`${server.url}/loop`)).rejects.toMatchObject({ code: 'PAYMENT_NOT_OFFERED' })
+    expect(sent).toHaveLength(20)
+  })
+
+  it('follows a 303 as a GET without the body, as a fetch would', async () => {
+    const { sent, pay } = payOver((request) =>
+      request.method === 'POST'
+        ? Response.redirect(`${server.url}/done`, 303)
+        : new Response('done', { status: 200 }),
+    )
+    const { response } = await pay(`${server.url}/submit`, {
+      method: 'POST',
+      body: 'form',
+      headers: { 'content-type': 'text/plain' },
+    })
+    expect(response.status).toBe(200)
+    const [, followed] = sent
+    expect(followed?.method).toBe('GET')
+    expect(followed?.url).toBe(`${server.url}/done`)
+    expect(followed?.headers.get('content-type')).toBeNull()
+    expect(sent.every((request) => request.redirect === 'manual')).toBe(true)
+  })
+
   it.each([
     ['a payment window over 600 seconds', { maxTimeoutSeconds: 601 }],
     ['a payment window given as a string', { maxTimeoutSeconds: '300' }],
