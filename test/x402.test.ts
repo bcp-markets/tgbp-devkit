@@ -1139,6 +1139,41 @@ describe('createTgbpPaymentFetch', () => {
     expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({ firstPayment: true })
   })
 
+  it('keeps the ledger entry and signs nothing for a payment cancelled once the guard recorded it', async () => {
+    const signed: unknown[] = []
+    const counting = {
+      ...payerWallet,
+      signTypedData: (args: never) => {
+        signed.push(args)
+        return payerWallet.signTypedData(args)
+      },
+    } as WalletClient
+    const caller = new AbortController()
+    // The caller gives up just after the guard records the payment.
+    const recording: SpendGuard = {
+      ...guard,
+      authorize: async (request, signal) => {
+        await guard.authorize(request, signal)
+        caller.abort()
+      },
+    }
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: counting,
+      maxPencePerRequest: 10,
+      token,
+      guard: recording,
+    })
+    const error = await fetchPaid(`${server.url}/quote`, { signal: caller.signal }, REASON).catch(
+      (e: unknown) => e,
+    )
+    expect((error as Error).name).toBe('AbortError')
+    expect(signed).toHaveLength(0)
+    expect(fake.calls.verify).toHaveLength(0)
+    // The ledger may overstate the day's spend, never understate it.
+    expect(await readFile(ledgerPath, 'utf8')).toContain(`${server.url}/quote`)
+  })
+
   it('sends nothing for a payment the caller cancels while it is being signed', async () => {
     const caller = new AbortController()
     const cancelling = {
