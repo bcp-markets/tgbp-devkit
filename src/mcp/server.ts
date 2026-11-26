@@ -33,7 +33,7 @@ import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   MAX_REASON_LENGTH,
 } from '../agent/guard.js'
-import type { SpendPolicy } from '../agent/policy.js'
+import { matchService, type SpendPolicy } from '../agent/policy.js'
 import { SubmissionJournal } from '../agent/submissions.js'
 import { formatAmount } from '../amount.js'
 import { readCapped } from '../body.js'
@@ -483,6 +483,14 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
           // The client's cancel stops a payment not yet signed; after signing it reports PAYMENT_UNCONFIRMED.
           const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(X402_TIMEOUT_MS)])
           if (estimate) {
+            // Checked before any request, so an estimate cannot read a URL the policy does not list.
+            if (matchService(guard.policy.x402?.services ?? [], url) === undefined) {
+              throw new TgbpKitError(
+                'SPEND_POLICY_DENIED',
+                `Spend policy refused x402: ${url} is not an approved x402 service`,
+                { details: { action: 'x402', url, rule: 'services' } },
+              )
+            }
             const x402 = await loadX402()
             const quote = await x402.quoteTgbpPayment(url, { signal })
             if (quote.free) return { estimate: true, ...quote }

@@ -1067,6 +1067,30 @@ describe('tgbp_x402_pay', () => {
     expect(await ledger()).toBe('')
   })
 
+  it('refuses an estimate for a URL on no listed service before any request', async () => {
+    let hits = 0
+    const other = express()
+    other.use((_req, res) => {
+      hits += 1
+      res.status(402).end()
+    })
+    const unlisted = await serve(other)
+    try {
+      const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+        url: `${unlisted.url}/quote`,
+        maxPence: 5,
+        estimate: true,
+      })
+      expect(isError).toBe(true)
+      expect(body.code).toBe('SPEND_POLICY_DENIED')
+      expect(body.details).toMatchObject({ rule: 'services', url: `${unlisted.url}/quote` })
+      expect(hits).toBe(0)
+      expect(signTypedData).not.toHaveBeenCalled()
+    } finally {
+      await unlisted.close()
+    }
+  })
+
   it('says a route is free with estimate: true', async () => {
     const { body } = await call(await connectX402(), 'tgbp_x402_pay', {
       url: `${paid.url}/free`,
