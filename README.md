@@ -391,6 +391,13 @@ The plugin adds the skills only. Add the `tgbp-mcp` server yourself, as above, s
 stay in your own config. For any other agent, copy the skills into its skills directory. They ship
 in the npm package too.
 
+**Served over MCP.** `tgbp-mcp` declares the MCP skills extension (`io.modelcontextprotocol/skills`)
+and serves `tgbp-build-integration` at `skill://tgbp-build-integration/SKILL.md`. That skill tells
+the agent how to write a sandbox integration in your own codebase with this kit: mints, redemptions,
+webhooks and status. A client that supports skills finds it through `skills/list`. Any other client
+gets the same tools as before; it also sees the server's `resources` capability and the skill's
+resource template.
+
 ### Using the policy without MCP
 
 `@bcptechnologies/tgbp-kit/agent` needs `viem`.

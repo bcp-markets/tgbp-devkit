@@ -195,6 +195,52 @@ jobs:
           TGBP_API_SPEC_DIR: .api-spec
           TGBP_VENDOR_GUARD: ${{ secrets.TGBP_VENDOR_GUARD }}
 
+  skills-drift:
+    name: Served skills match the pinned agent skills
+    # The agent-skills repo is private: its name and deploy key are tgbp-source
+    # secrets, as for registry-drift.
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch')
+    environment: tgbp-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # An empty repository input would check out this public repo instead.
+      - name: Check the tgbp-source secrets are set
+        env:
+          REPO: ${{ secrets.TGBP_AGENT_SKILLS_REPO }}
+        run: test -n "$REPO"
+      - name: Read the pinned agent-skills commit
+        id: pin
+        run: |
+          sha="$(cat agent-skills.lock)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "agent-skills.lock is not a commit SHA"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out the pinned agent skills
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ secrets.TGBP_AGENT_SKILLS_REPO }}
+          ref: ${{ steps.pin.outputs.sha }}
+          path: .agent-skills
+          ssh-key: ${{ secrets.TGBP_AGENT_SKILLS_DEPLOY_KEY }}
+          persist-credentials: false
+          sparse-checkout: skills
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run test/skills-drift.test.ts
+        env:
+          TGBP_AGENT_SKILLS_DIR: .agent-skills
+          TGBP_REQUIRE_SOURCE: '1'
+
   sandbox:
     name: Mint and redeem on sandbox.tgbp.io (TypeScript and Python)
     # The staging API key and the sandbox record ids are secrets in the sandbox

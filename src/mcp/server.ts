@@ -39,6 +39,7 @@ import { formatAmount } from '../amount.js'
 import { readCapped } from '../body.js'
 import { isTgbpKitError, TgbpKitError } from '../errors.js'
 import { KIT_VERSION } from '../version.js'
+import { serveSkills } from './skills.js'
 import {
   acceptsTask,
   registerTaskHandlers,
@@ -145,6 +146,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   )
   const taskStore = options.taskStore ?? new TaskStore(options.now)
   registerTaskHandlers(server, taskStore)
+  serveSkills(server)
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
   // An answer that comes after the 2025-era wait would end is refused, as that wait refuses it.
   const approvalStateTtlMs = Math.max(1, Math.ceil(approvalTimeoutMs / 1000)) * 1000

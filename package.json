@@ -84,6 +84,7 @@
     "test": "vitest run",
     "generate:registry": "tsx scripts/generate-registry.ts",
     "generate:api": "tsx scripts/generate-api.ts",
+    "generate:skills": "tsx scripts/vendor-skills.ts",
     "check:disclosure": "tsx scripts/disclosure.ts",
     "build:fixtures": "forge build --root test/fixtures --contracts . --out out --cache-path cache && tsx scripts/export-fixture.ts",
     "prepublishOnly": "pnpm run build",
