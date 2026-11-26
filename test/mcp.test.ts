@@ -1067,6 +1067,62 @@ describe('tgbp_x402_pay', () => {
     expect(await ledger()).toBe('')
   })
 
+  /** A server the policy does not list, counting the requests that reach it. */
+  const unlistedServer = async () => {
+    const counted = { hits: 0 }
+    const app = express()
+    app.use((_req, res) => {
+      counted.hits += 1
+      res.status(402).end()
+    })
+    return Object.assign(counted, await serve(app))
+  }
+
+  it.each([
+    ['an estimate', { estimate: true }],
+    ['a payment', { reason: 'a quote for the user' }],
+  ])('refuses %s for a URL on no listed service before any request', async (_, args) => {
+    const unlisted = await unlistedServer()
+    try {
+      const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+        url: `${unlisted.url}/quote?key=secret`,
+        maxPence: 5,
+        ...args,
+      })
+      expect(isError).toBe(true)
+      expect(body.code).toBe('SPEND_POLICY_DENIED')
+      expect(body.details).toMatchObject({ rule: 'services', url: `${unlisted.url}/quote` })
+      expect(body.message).not.toMatch(/secret/)
+      expect(unlisted.hits).toBe(0)
+      expect(signTypedData).not.toHaveBeenCalled()
+    } finally {
+      await unlisted.close()
+    }
+  })
+
+  it('refuses an estimate that a listed service redirects elsewhere', async () => {
+    const unlisted = await unlistedServer()
+    const app = express()
+    app.use((_req, res) => res.redirect(302, `${unlisted.url}/quote`))
+    const listed = await serve(app)
+    try {
+      const policy = x402Policy()
+      const x402 = { ...policy.x402, services: [{ match: listed.url, category: 'quotes' }] }
+      const { isError, body } = await call(
+        await connectX402({ ...policy, x402 } as SpendPolicy),
+        'tgbp_x402_pay',
+        { url: `${listed.url}/quote`, maxPence: 5, estimate: true },
+      )
+      expect(isError).toBe(true)
+      expect(body.code).toBe('PAYMENT_NOT_OFFERED')
+      expect(body.details).toMatchObject({ status: 302 })
+      expect(unlisted.hits).toBe(0)
+    } finally {
+      await listed.close()
+      await unlisted.close()
+    }
+  })
+
   it('says a route is free with estimate: true', async () => {
     const { body } = await call(await connectX402(), 'tgbp_x402_pay', {
       url: `${paid.url}/free`,

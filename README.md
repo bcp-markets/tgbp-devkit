@@ -366,11 +366,13 @@ only, and a call that takes longer than 45 seconds fails. A price above `maxPenc
 anything is signed. With `estimate: true` it returns the price and whether it fits `maxPence`,
 signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
 The policy must allow `x402` on `base-sepolia`, the payee, and the URL's service in
-`x402.services`. The tool needs
+`x402.services`. The tool checks the service before it sends any request: a URL that no listed
+service matches is refused with `SPEND_POLICY_DENIED`. An estimate also refuses a redirect. The
+tool needs
 `TGBP_EVM_PRIVATE_KEY`, `TGBP_RPC_URL_BASE_SEPOLIA`, and the `@x402/core` and `@x402/evm`
 packages: add `"-p", "@x402/core@2", "-p", "@x402/evm@2"` to the `npx` arguments above. The other
-tools run without them. The server fetches whatever URL the agent names, from the machine it runs
-on, so run it where that is acceptable.
+tools run without them. The server fetches the listed services from the machine it runs on, and a
+payment's first, unpaid request follows their redirects, so run it where that is acceptable.
 
 ### Skills
 
@@ -552,7 +554,7 @@ Failures the kit can explain throw a `TgbpKitError` with a `code`:
 | `API_ERROR` | The API answered with an error. `details` has `status`, `apiCode` and `requestId`. |
 | `API_UNREACHABLE` | The API gave no response after every retry. |
 | `SPEND_POLICY_DENIED` | The agent spend policy refused the action. `details.rule` names the rule. |
-| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain. |
+| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain, or answered an MCP estimate with a redirect. |
 | `PAYMENT_OVER_LIMIT` | An x402 price is above the client's `maxPencePerRequest`. |
 | `PAYMENT_REFUSED` | The x402 server rejected a signed payment; `details.reason` says why. |
 | `PAYMENT_UNCONFIRMED` | The client signed an x402 payment, but no matching settlement came back. |

@@ -12,7 +12,9 @@ needs test tGBP but no ETH: the facilitator pays the gas.
 2. Call `tgbp_policy` and check that `actions` has `x402`, `chains` has `base-sepolia`, and
    `x402.services` has a service that matches the URL.
 3. Call `tgbp_x402_pay` with `url`, `maxPence` and `estimate: true`. This reads the price and
-   pays nothing. If `free` is true, the URL does not charge: fetch it some other way. If
+   pays nothing. A URL that no listed service matches fails with `SPEND_POLICY_DENIED` before
+   any request, and a redirect fails with `PAYMENT_NOT_OFFERED`: tell the user and stop. If
+   `free` is true, the URL does not charge: fetch it some other way. If
    `withinMax` is false, tell the user the price (`amount`, in tGBP) and stop. If `payTo` is
    not in the policy's `destinations`, the payment will be refused: tell the user. Compare
    addresses ignoring case.
@@ -95,7 +97,7 @@ the user can change the policy.
 
 - `PAYMENT_OVER_LIMIT`: the price is above `maxPence`. Nothing was signed.
 - `PAYMENT_NOT_OFFERED`: the URL offers no payment the kit will sign, such as another token or a
-  payment valid for too long. Nothing was signed.
+  payment valid for too long, or it answered an estimate with a redirect. Nothing was signed.
 - `INSUFFICIENT_BALANCE`, `TOKEN_PAUSED`, `ADDRESS_BANNED`: nothing was signed.
 - `PAYMENT_UNCONFIRMED` or `PAYMENT_REFUSED`: the payment was signed and **may still settle**
   until `details.deadline` (Unix seconds). Do not pay again before then: a retry may pay twice.
