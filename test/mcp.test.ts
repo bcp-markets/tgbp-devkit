@@ -11,6 +11,7 @@ import {
   InMemoryTransport,
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client'
+import { SKILLS_EXTENSION_ID, SkillsClient } from '@modelcontextprotocol/client/ext/skills'
 import { createMcpHandler } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import express from 'express'
@@ -27,6 +28,7 @@ import {
   TaskStore,
   type TgbpMcpServerOptions,
 } from '../src/mcp/index.js'
+import { SKILL_FILES } from '../src/mcp/skills.generated.js'
 import { TGBP_BASE_SEPOLIA, tgbpPaymentMiddleware, x402Network } from '../src/x402/server.js'
 import { fakeFacilitator, SETTLE_HASH, serve } from './x402-fakes.js'
 
@@ -412,6 +414,41 @@ describe('tgbp MCP server', () => {
     expect(body.code).toBe('SPEND_POLICY_DENIED')
     expect(body.details.rule).toBe('expiresAt')
     expectNothingSent()
+  })
+})
+
+describe('agent skills', () => {
+  const INTEGRATION = 'skill://tgbp-build-integration/SKILL.md'
+
+  it('declares the skills extension and lists the integration skill', async () => {
+    const client = await connect()
+    expect(client.getServerCapabilities()?.extensions).toHaveProperty(SKILLS_EXTENSION_ID)
+    const { skills, invalid } = await new SkillsClient(client).list()
+    expect(invalid).toEqual([])
+    expect(skills.map((skill) => [skill.uri, skill.frontmatter.name])).toEqual([
+      [INTEGRATION, 'tgbp-build-integration'],
+    ])
+  })
+
+  it.each([
+    ['2025-11-25', connect],
+    ['2026-07-28', connectModern],
+  ])(
+    'serves the integration skill identical to the vendored file on protocol %s',
+    async (_, open) => {
+      const skills = new SkillsClient(await open())
+      const { skill } = await skills.get(INTEGRATION)
+      const file = await skills.read(skill)
+      expect(file.verified).toBe(true)
+      expect(file.text).toBe(SKILL_FILES['tgbp-build-integration/SKILL.md'])
+    },
+  )
+
+  it('reads no file outside the served skills', async () => {
+    const client = await connect()
+    for (const uri of ['skill://constructor', 'skill://tgbp-build-integration/README.md']) {
+      await expect(client.readResource({ uri })).rejects.toThrow()
+    }
   })
 })
 
