@@ -561,6 +561,19 @@ describe('redemption over the approval threshold', () => {
     ])
   })
 
+  it('keeps two calls apart on one 2026-07-28 stdio connection: each asks, each redeems once', async () => {
+    const client = await connectStdio({ modern: true })
+    const results = await Promise.all([
+      call(client, 'tgbp_redeem', { ...redeem, reference: 'first' }),
+      call(client, 'tgbp_redeem', { ...redeem, reference: 'second' }),
+    ])
+    expect(results.map((r) => r.isError)).toEqual([false, false])
+    expect(client.asked).toHaveLength(2)
+    expect(api.redemptions.create).toHaveBeenCalledTimes(2)
+    expect(chain.transfer).toHaveBeenCalledTimes(2)
+    expect((await readFile(join(dir, 'ledger.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(2)
+  })
+
   it.each(['decline', 'cancel'] as const)(
     'is refused over stdio on a 2026-07-28 connection when the human answers %s',
     async (answer) => {

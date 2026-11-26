@@ -268,6 +268,8 @@ ones can add up to. On a 2025-era connection the server asks in the middle of th
 the client calls again with the human's answer. That answer approves only the action it was asked
 about, counts once, and is refused once the approval timeout has passed. The same process must
 receive both rounds, so a host that spreads one connection's calls across processes cannot approve.
+On either protocol the server trusts the MCP client to pass on the human's answer: use a client
+that asks the human itself, never one that lets the agent answer.
 
 The transfer, mint, redeem, swap and x402 pay tools carry
 `_meta["anthropic/requiresUserInteraction"]: true`, so a client that honours it asks the human

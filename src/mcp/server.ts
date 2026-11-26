@@ -99,8 +99,8 @@ const X402_TIMEOUT_MS = 45_000
 const REQUIRES_USER_INTERACTION = { 'anthropic/requiresUserInteraction': true }
 
 const CANNOT_ASK_ON_THIS_CONNECTION =
-  'This server asks a human only on a 2025-era MCP connection it holds open, such as stdio; ' +
-  'this connection cannot carry the question'
+  'This server asks a human on a 2025-era MCP connection it holds open, such as stdio, or ' +
+  'through input_required on a 2026-07-28 request; this connection cannot carry the question'
 
 /** The `inputRequests` key a 2026-07-28 approval question goes under. */
 const APPROVAL_INPUT = 'approval'
@@ -145,7 +145,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   const taskStore = options.taskStore ?? new TaskStore(options.now)
   registerTaskHandlers(server, taskStore)
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS
-  // An answer later than the 2025-era wait would be is refused, as that wait refuses it.
+  // An answer that comes after the 2025-era wait would end is refused, as that wait refuses it.
   const approvalState = createRequestStateCodec<ApprovalState>({
     key: APPROVAL_STATE_KEY,
     ttlSeconds: Math.max(1, Math.ceil(approvalTimeoutMs / 1000)),
@@ -177,14 +177,16 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
         )
       }
       // An answer to another action, or one already used, approves nothing: ask again.
-      if (state.digest === digest && claimAnswer(state.nonce, approvalTimeoutMs)) {
+      if (state.digest === digest) {
         const responses = ctx.mcpReq.inputResponses
         if (responses?.[APPROVAL_INPUT] === undefined) {
           throw new Error('the client called again without the answer')
         }
-        // Undefined on a decline or a cancel.
-        const content = acceptedContent(responses, APPROVAL_INPUT)
-        return content?.approve === true
+        if (claimAnswer(state.nonce, approvalTimeoutMs)) {
+          // Undefined on a decline or a cancel.
+          const content = acceptedContent(responses, APPROVAL_INPUT)
+          return content?.approve === true
+        }
       }
     }
     const capabilities = envelope(ctx)[CLIENT_CAPABILITIES_META_KEY] as
@@ -224,7 +226,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     }
     const capabilities = server.server.getClientCapabilities()
     // A 2025-era connection that the server holds open (stdio) carries the client's
-    // capabilities; a 2026-07-28 one does not, and cannot carry the question.
+    // capabilities; any other connection cannot carry the question.
     if (capabilities === undefined) throw new Error(CANNOT_ASK_ON_THIS_CONNECTION)
     if (!capabilities.elicitation) return false
     const { message, schema } = approvalQuestion(request)
