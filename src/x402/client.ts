@@ -217,7 +217,7 @@ export function createTgbpPaymentFetch({
       url: ledgerUrl(url),
       reason: payment.reason,
     })
-    // Approval can outlast the caller. The ledger keeps the entry, overstating the day's spend.
+    // Approval can outlast the caller. The ledger keeps the entry: it may overstate, never understate.
     request.signal.throwIfAborted()
 
     const payload = await http.createPaymentPayload({ ...paymentRequired, accepts: [offer] })
@@ -238,12 +238,14 @@ export function createTgbpPaymentFetch({
       body: first.body,
       // A redirect would carry the signed payment to wherever it points.
       redirect: 'error',
-      // An abort after signing surfaces as PAYMENT_UNCONFIRMED below.
+      // An abort once the paid request is sent surfaces as PAYMENT_UNCONFIRMED below.
       signal: request.signal,
     })
     for (const [name, value] of Object.entries(http.encodePaymentSignatureHeader(payload))) {
       paid.headers.set(name, value)
     }
+    // A signature that never leaves the process pays nothing, even through a fetch that ignores the signal.
+    request.signal.throwIfAborted()
     let response: Response
     try {
       response = await fetchFn(paid)
