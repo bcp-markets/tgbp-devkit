@@ -366,7 +366,8 @@ only, and a call that takes longer than 45 seconds fails. A price above `maxPenc
 anything is signed. With `estimate: true` it returns the price and whether it fits `maxPence`,
 signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
 The policy must allow `x402` on `base-sepolia`, the payee, and the URL's service in
-`x402.services`. The tool needs
+`x402.services`. An estimate checks the service too, before it sends any request: a URL that no
+listed service matches is refused with `SPEND_POLICY_DENIED`. The tool needs
 `TGBP_EVM_PRIVATE_KEY`, `TGBP_RPC_URL_BASE_SEPOLIA`, and the `@x402/core` and `@x402/evm`
 packages: add `"-p", "@x402/core@2", "-p", "@x402/evm@2"` to the `npx` arguments above. The other
 tools run without them. The server fetches whatever URL the agent names, from the machine it runs

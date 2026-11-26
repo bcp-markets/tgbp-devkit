@@ -12,7 +12,8 @@ needs test tGBP but no ETH: the facilitator pays the gas.
 2. Call `tgbp_policy` and check that `actions` has `x402`, `chains` has `base-sepolia`, and
    `x402.services` has a service that matches the URL.
 3. Call `tgbp_x402_pay` with `url`, `maxPence` and `estimate: true`. This reads the price and
-   pays nothing. If `free` is true, the URL does not charge: fetch it some other way. If
+   pays nothing. A URL that no listed service matches fails with `SPEND_POLICY_DENIED` before
+   any request: tell the user and stop. If `free` is true, the URL does not charge: fetch it some other way. If
    `withinMax` is false, tell the user the price (`amount`, in tGBP) and stop. If `payTo` is
    not in the policy's `destinations`, the payment will be refused: tell the user. Compare
    addresses ignoring case.
