@@ -11,7 +11,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 import {
-  acceptedContent,
   type CallToolResult,
   CLIENT_CAPABILITIES_META_KEY,
   createRequestStateCodec,
@@ -160,40 +159,50 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
    * refuses, so nothing is signed, sent or recorded; `asking` then returns
    * the question as `input_required`.
    */
-  async function approveFromInput(call: ApprovalCall, request: ApprovalRequest): Promise<boolean> {
+  async function approveFromInput(
+    call: ApprovalCall,
+    request: ApprovalRequest,
+    signal: AbortSignal,
+  ): Promise<boolean> {
     const { ctx } = call
     const digest = createHash('sha256').update(JSON.stringify(request)).digest('hex')
     const sealed = ctx.mcpReq.requestState<unknown>()
+    const answer = ctx.mcpReq.inputResponses?.[APPROVAL_INPUT]
+    if (typeof sealed !== 'string' && answer !== undefined) {
+      throw new Error("the client sent an answer without its question's requestState")
+    }
     if (typeof sealed === 'string') {
       let state: ApprovalState
       try {
         state = await approvalState.verify(sealed, ctx)
       } catch (error) {
-        const reason = error instanceof Error ? error.message : ''
-        throw new Error(
-          reason === 'expired'
-            ? 'no answer before the timeout'
-            : 'the answer is not to a question this server asked',
-        )
+        const reason = error instanceof Error ? error.message : String(error)
+        if (reason === 'expired') {
+          throw new Error('no answer before the timeout; call the tool again to ask again')
+        }
+        if (['malformed', 'mac', 'bind'].includes(reason)) {
+          throw new Error(
+            'the answer is not to a question this server asked; call the tool again to ask again',
+          )
+        }
+        throw new Error(`could not check the answer: ${reason}`, { cause: error })
       }
       // An answer to another action, or one already used, approves nothing: ask again.
       if (state.digest === digest) {
-        const responses = ctx.mcpReq.inputResponses
-        if (responses?.[APPROVAL_INPUT] === undefined) {
-          throw new Error('the client called again without the answer')
-        }
-        if (claimAnswer(state.nonce, approvalTimeoutMs)) {
-          // Undefined on a decline or a cancel.
-          const content = acceptedContent(responses, APPROVAL_INPUT)
-          return content?.approve === true
-        }
+        if (answer === undefined) throw new Error('the client called again without the answer')
+        const approve = humanAnswer(answer)
+        // The guard stopped waiting: a late answer must not be spent on a refusal.
+        if (signal.aborted) return false
+        if (claimAnswer(state.nonce, approvalTimeoutMs)) return approve
       }
     }
     const capabilities = envelope(ctx)[CLIENT_CAPABILITIES_META_KEY] as
       | { elicitation?: unknown }
       | undefined
-    if (!capabilities?.elicitation) return false
-    call.question = { request, digest }
+    if (!capabilities?.elicitation) {
+      throw new Error('the MCP client does not declare elicitation, so no human was asked')
+    }
+    if (!signal.aborted) call.question = { request, digest }
     return false
   }
 
@@ -207,7 +216,8 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
   ): Promise<CallToolResult | InputRequiredResult> {
     const call: ApprovalCall = { ctx }
     const result = await approvalCalls.run(call, fn)
-    if (!call.question) return result
+    // Only the refusal that the question caused becomes the question.
+    if (!call.question || !result.isError) return result
     const { request, digest } = call.question
     const { message, schema } = approvalQuestion(request)
     return inputRequired({
@@ -222,7 +232,7 @@ export function createTgbpMcpServer(options: TgbpMcpServerOptions): McpServer {
     const call = approvalCalls.getStore()
     // A 2026-07-28 request names its protocol version in its envelope.
     if (call && envelope(call.ctx)[PROTOCOL_VERSION_META_KEY] !== undefined) {
-      return approveFromInput(call, request)
+      return approveFromInput(call, request, signal)
     }
     const capabilities = server.server.getClientCapabilities()
     // A 2025-era connection that the server holds open (stdio) carries the client's
@@ -531,6 +541,18 @@ function approvalQuestion(request: ApprovalRequest) {
       required: ['approve'],
     },
   }
+}
+
+/**
+ * Reads the human's answer to the approval form: a yes, or a no on a decline
+ * or cancel. Anything else is a broken client, which must not look like a "no".
+ */
+function humanAnswer(answer: unknown): boolean {
+  const { action, content } = (answer ?? {}) as { action?: unknown; content?: unknown }
+  if (action === 'decline' || action === 'cancel') return false
+  const approve = (content as { approve?: unknown } | undefined)?.approve
+  if (action === 'accept' && typeof approve === 'boolean') return approve
+  throw new Error('the client answered with something other than the approval form')
 }
 
 /** The request's 2026-07-28 `_meta` envelope; empty on a 2025-era request. */

@@ -250,7 +250,12 @@ async function connectStdio(options: { modern?: boolean; answer?: ModernAnswer }
 }
 
 /** One `tgbp_redeem` round by hand; with `requestState`, it answers yes to the approval question. */
-async function round(client: Client, args: Record<string, unknown>, requestState?: string) {
+async function round(
+  client: Client,
+  args: Record<string, unknown>,
+  requestState?: string,
+  answer: unknown = { action: 'accept', content: { approve: true } },
+) {
   const params = {
     name: 'tgbp_redeem',
     arguments: args,
@@ -258,7 +263,7 @@ async function round(client: Client, args: Record<string, unknown>, requestState
       ? {}
       : {
           requestState,
-          inputResponses: { approval: { action: 'accept', content: { approve: true } } },
+          inputResponses: { approval: answer },
         }),
   }
   // The SDK types no inputResponses on callTool; the manual multi-round path still sends them.
@@ -424,6 +429,7 @@ describe('redemption over the approval threshold', () => {
     const { body } = await call(client, 'tgbp_redeem', redeem)
     expect(body.code).toBe('SPEND_POLICY_DENIED')
     expect(body.details.rule).toBe('redemptionApprovalAbove')
+    expect(body.details.approverError).toMatch(/does not declare elicitation/)
     expect(inputRequiredResults(client.responses)).toEqual([])
     expectNothingSent()
   })
@@ -493,13 +499,39 @@ describe('redemption over the approval threshold', () => {
     expectNothingSent()
   })
 
+  it('refuses a malformed answer as a broken client, never as a no, and keeps the question open', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const first = await round(client, redeem)
+    const broken = textOf(await round(client, redeem, first.requestState, { action: 'accept' }))
+    expect(broken.body.details.approverError).toMatch(/something other than the approval form/)
+    expectNothingSent()
+    // The broken answer did not use the question up: a real answer to it still counts.
+    const approved = await round(client, redeem, first.requestState)
+    expect(approved.isError).toBeFalsy()
+    expect(api.redemptions.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses an answer sent without its requestState', async () => {
+    const client = await connectModern({ answer: 'approve' })
+    const params = {
+      name: 'tgbp_redeem',
+      arguments: redeem,
+      inputResponses: { approval: { action: 'accept', content: { approve: true } } },
+    }
+    const result = await client.callTool(params as Parameters<Client['callTool']>[0], {
+      allowInputRequired: true,
+    })
+    expect(textOf(result).body.details.approverError).toMatch(/without its question's requestState/)
+    expectNothingSent()
+  })
+
   it('refuses an answer that comes back after the approval timeout', async () => {
     const client = await connectModern({ answer: 'approve', server: { approvalTimeoutMs: 1000 } })
     const first = await round(client, redeem)
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 5_000 })
     try {
       const { body } = textOf(await round(client, redeem, first.requestState))
-      expect(body.details.approverError).toBe('no answer before the timeout')
+      expect(body.details.approverError).toMatch(/^no answer before the timeout/)
     } finally {
       vi.useRealTimers()
     }
