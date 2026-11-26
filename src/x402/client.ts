@@ -168,9 +168,16 @@ export function createTgbpPaymentFetch({
         : minBigInt(limit, penceToBaseUnits(payment.maxPence, token))
     const request = new Request(input, init)
     const first = await sendFirst(request, fetchFn, guard.policy.x402?.services ?? [])
-    if (first.status !== 402) return { response: first }
+    if (first.response.status !== 402) return { response: first.response }
 
-    const { url, paymentRequired, offer } = await readTerms(first, request, http, token, network)
+    const { url, paymentRequired, offer } = await readTerms(
+      first.response,
+      request.url,
+      first.url,
+      http,
+      token,
+      network,
+    )
     const amount = BigInt(offer.amount)
     if (amount > callLimit) {
       throw new TgbpKitError(
@@ -221,10 +228,11 @@ export function createTgbpPaymentFetch({
       deadline: signedDeadline(payload) ?? Math.floor(Date.now() / 1000) + offer.maxTimeoutSeconds,
     }
 
+    // The request the server priced: a redirect may have changed its method, body and headers.
     const paid = new Request(url, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body === null ? null : await request.arrayBuffer(),
+      method: first.method,
+      headers: first.headers,
+      body: first.body,
       // A redirect would carry the signed payment to wherever it points.
       redirect: 'error',
       // An abort after signing surfaces as PAYMENT_UNCONFIRMED below.
@@ -348,7 +356,14 @@ export async function quoteTgbpPayment(
   }
   const network = x402Network(token)
   const http = new x402HTTPClient(new x402Client())
-  const { url, offer } = await readTerms(first, request, http, token, network)
+  const { url, offer } = await readTerms(
+    first,
+    request.url,
+    first.url || request.url,
+    http,
+    token,
+    network,
+  )
   return { free: false, url, amount: BigInt(offer.amount), payTo: getAddress(offer.payTo), network }
 }
 
@@ -361,22 +376,32 @@ const BODY_HEADERS = ['content-encoding', 'content-language', 'content-location'
 /** The headers a fetch drops when a redirect changes origin. */
 const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization']
 
+/** The last response of the unpaid first request, and the request that drew it. */
+interface FirstAnswer {
+  response: Response
+  url: string
+  method: string
+  headers: Headers
+  body: ArrayBuffer | null
+}
+
 /**
  * Sends the unpaid first request and follows a redirect only to a URL on one
  * of `services`, so a listed service that redirects cannot lead the client to
  * a host the policy does not list. Each hop is fetched with
- * `redirect: 'manual'` and rewritten as a fetch would rewrite it.
+ * `redirect: 'manual'` and rewritten as a fetch would rewrite it. It reads
+ * `request`'s body.
  */
 async function sendFirst(
   request: Request,
   fetchFn: typeof fetch,
   services: X402Service[],
-): Promise<Response> {
+): Promise<FirstAnswer> {
   let url = request.url
   let method = request.method
-  let body = request.body === null ? null : await request.clone().arrayBuffer()
+  let body = request.body === null ? null : await request.arrayBuffer()
   const headers = new Headers(request.headers)
-  for (let hops = 0; ; hops += 1) {
+  for (let redirects = 0; ; redirects += 1) {
     const response = await fetchFn(
       new Request(url, { method, headers, body, redirect: 'manual', signal: request.signal }),
     )
@@ -389,22 +414,27 @@ async function sendFirst(
       )
     }
     const location = response.headers.get('location')
-    if (!REDIRECT_STATUSES.has(response.status) || location === null) return response
-    await response.body?.cancel()
+    if (!REDIRECT_STATUSES.has(response.status) || location === null) {
+      return { response, url, method, headers, body }
+    }
+    // The redirect's own body is discarded, so a failure to cancel it changes nothing.
+    await response.body?.cancel().catch(() => undefined)
 
     let next: URL
     try {
       next = new URL(location, url)
-    } catch (cause) {
+    } catch {
+      // No cause: the parse error quotes the location, which may carry secrets.
       throw new TgbpKitError(
         'PAYMENT_NOT_OFFERED',
         `${ledgerUrl(url)} redirected to a location that is not a URL`,
-        { cause, details: { url: ledgerUrl(url), status: response.status } },
+        { details: { url: ledgerUrl(url), status: response.status } },
       )
     }
-    // Origin and path only, as the guard reports a URL: the query may carry secrets.
+    // Origin and path only, as the guard reports a URL: the query and credentials may carry secrets.
     const web = next.protocol === 'https:' || next.protocol === 'http:'
-    if (!web || matchService(services, next.href) === undefined) {
+    const credentialed = next.username !== '' || next.password !== ''
+    if (!web || credentialed || matchService(services, next.href) === undefined) {
       const to = web ? ledgerUrl(next.href) : next.protocol
       throw new TgbpKitError(
         'SPEND_POLICY_DENIED',
@@ -412,11 +442,11 @@ async function sendFirst(
         { details: { action: 'x402', url: to, redirectedFrom: ledgerUrl(url), rule: 'services' } },
       )
     }
-    if (hops + 1 >= MAX_REDIRECTS) {
+    if (redirects === MAX_REDIRECTS) {
       throw new TgbpKitError(
         'PAYMENT_NOT_OFFERED',
         `${ledgerUrl(request.url)} redirected more than ${MAX_REDIRECTS} times`,
-        { details: { url: ledgerUrl(request.url) } },
+        { details: { url: ledgerUrl(request.url), redirectedTo: ledgerUrl(next.href) } },
       )
     }
 
@@ -436,20 +466,23 @@ async function sendFirst(
   }
 }
 
-/** The x402 terms of a 402 answer to `request`, and the tGBP offer the client accepts. */
+/**
+ * The x402 terms of `first`, the 402 that `url` answered to a request for
+ * `called`, and the tGBP offer the client accepts.
+ */
 async function readTerms(
   first: Response,
-  request: Request,
+  called: string,
+  url: string,
   http: x402HTTPClient,
   token: EvmTokenDeployment,
   network: string,
 ): Promise<{ url: string; paymentRequired: PaymentRequired; offer: PaymentRequirements }> {
-  const url = first.url || request.url
-  if (new URL(url).origin !== new URL(request.url).origin) {
+  if (new URL(url).origin !== new URL(called).origin) {
     throw new TgbpKitError(
       'PAYMENT_NOT_OFFERED',
-      `${request.url} redirected to ${url}, which asked for payment; the client pays only the origin it called`,
-      { details: { url: request.url, redirectedTo: url } },
+      `${called} redirected to ${url}, which asked for payment; the client pays only the origin it called`,
+      { details: { url: called, redirectedTo: url } },
     )
   }
   let paymentRequired: PaymentRequired

@@ -475,6 +475,8 @@ describe('createTgbpPaymentFetch', () => {
     app.post('/echo', express.text(), (req, res) => res.json({ echo: req.body }))
     app.get('/broken', (_req, res) => res.status(500).json({ error: 'handler failed' }))
     app.get('/free', (_req, res) => res.json({ quote: 'free' }))
+    app.post('/see-quote', (_req, res) => res.redirect(303, '/quote'))
+    app.post('/moved-echo', (_req, res) => res.redirect(307, '/echo'))
     server = await serve(app)
 
     dir = await mkdtemp(join(tmpdir(), 'tgbp-x402-'))
@@ -790,7 +792,74 @@ describe('createTgbpPaymentFetch', () => {
   it('stops following a listed service that keeps redirecting', async () => {
     const { sent, pay } = payOver(() => Response.redirect(`${server.url}/loop`, 302))
     await expect(pay(`${server.url}/loop`)).rejects.toMatchObject({ code: 'PAYMENT_NOT_OFFERED' })
-    expect(sent).toHaveLength(20)
+    // The first request and 20 redirects, as a fetch follows.
+    expect(sent).toHaveLength(21)
+  })
+
+  it('pays the GET a 303 redirect asked for, not the original POST', async () => {
+    const { response } = await pay()(`${server.url}/see-quote`, { method: 'POST', body: 'hello' })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ quote: 'paid' })
+    expect(fake.calls.settle).toHaveLength(1)
+  })
+
+  it('pays a POST a 307 redirect keeps, with its body', async () => {
+    const { response } = await pay()(`${server.url}/moved-echo`, { method: 'POST', body: 'hello' })
+    expect(await response.json()).toEqual({ echo: 'hello' })
+    expect(fake.calls.settle).toHaveLength(1)
+  })
+
+  it('drops credentials on a redirect to another listed origin, as a fetch would', async () => {
+    const other = 'http://other.test'
+    const twoServices = createSpendGuard({
+      policy: {
+        ...policy(),
+        x402: {
+          ...policy().x402,
+          services: [
+            { match: server.url, category: 'quotes' },
+            { match: other, category: 'quotes' },
+          ],
+        },
+      } as SpendPolicy,
+      ledgerPath,
+    })
+    const sent: Request[] = []
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: payerWallet,
+      maxPencePerRequest: 10,
+      token,
+      guard: twoServices,
+      fetch: async (input, init) => {
+        const request = new Request(input, init)
+        sent.push(request)
+        return request.url.startsWith(other)
+          ? new Response('elsewhere', { status: 200 })
+          : Response.redirect(`${other}/page`, 302)
+      },
+    })
+    const { response } = await fetchPaid(
+      `${server.url}/page`,
+      { headers: { authorization: 'Bearer secret', 'x-trace': 'kept' } },
+      REASON,
+    )
+    expect(response.status).toBe(200)
+    const [, followed] = sent
+    expect(followed?.url).toBe(`${other}/page`)
+    expect(followed?.headers.get('authorization')).toBeNull()
+    expect(followed?.headers.get('x-trace')).toBe('kept')
+  })
+
+  it.each([
+    ['credentials', (url: string) => url.replace('http://', 'http://user:pass@')],
+    ['another scheme', () => 'ftp://example.test/quote'],
+  ])('refuses a redirect to a URL with %s', async (_, target) => {
+    const { sent, pay } = payOver(() => Response.redirect(target(`${server.url}/quote`), 302))
+    const error = await pay(`${server.url}/start`).catch((e: unknown) => e)
+    expect(isTgbpKitError(error, 'SPEND_POLICY_DENIED') && error.details.rule).toBe('services')
+    expect(String((error as Error).message)).not.toMatch(/pass/)
+    expect(sent).toHaveLength(1)
   })
 
   it('follows a 303 as a GET without the body, as a fetch would', async () => {
@@ -809,6 +878,7 @@ describe('createTgbpPaymentFetch', () => {
     expect(followed?.method).toBe('GET')
     expect(followed?.url).toBe(`${server.url}/done`)
     expect(followed?.headers.get('content-type')).toBeNull()
+    expect(followed?.body).toBeNull()
     expect(sent.every((request) => request.redirect === 'manual')).toBe(true)
   })
 

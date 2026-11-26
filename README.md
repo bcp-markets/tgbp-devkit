@@ -558,7 +558,7 @@ Failures the kit can explain throw a `TgbpKitError` with a `code`:
 | `API_ERROR` | The API answered with an error. `details` has `status`, `apiCode` and `requestId`. |
 | `API_UNREACHABLE` | The API gave no response after every retry. |
 | `SPEND_POLICY_DENIED` | The agent spend policy refused the action. `details.rule` names the rule. |
-| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain, or answered an MCP estimate, or a payment in a browser, with a redirect. |
+| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain, or answered with a redirect the client does not follow: to a location that is not a URL, more than 20 times, in a browser, or to an MCP estimate. |
 | `PAYMENT_OVER_LIMIT` | An x402 price is above the client's `maxPencePerRequest`. |
 | `PAYMENT_REFUSED` | The x402 server rejected a signed payment; `details.reason` says why. |
 | `PAYMENT_UNCONFIRMED` | The client signed an x402 payment, but no matching settlement came back. |
