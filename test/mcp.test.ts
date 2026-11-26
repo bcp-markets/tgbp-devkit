@@ -1085,13 +1085,14 @@ describe('tgbp_x402_pay', () => {
     const unlisted = await unlistedServer()
     try {
       const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
-        url: `${unlisted.url}/quote`,
+        url: `${unlisted.url}/quote?key=secret`,
         maxPence: 5,
         ...args,
       })
       expect(isError).toBe(true)
       expect(body.code).toBe('SPEND_POLICY_DENIED')
       expect(body.details).toMatchObject({ rule: 'services', url: `${unlisted.url}/quote` })
+      expect(body.message).not.toMatch(/secret/)
       expect(unlisted.hits).toBe(0)
       expect(signTypedData).not.toHaveBeenCalled()
     } finally {

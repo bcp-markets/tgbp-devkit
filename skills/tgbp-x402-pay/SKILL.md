@@ -97,7 +97,7 @@ the user can change the policy.
 
 - `PAYMENT_OVER_LIMIT`: the price is above `maxPence`. Nothing was signed.
 - `PAYMENT_NOT_OFFERED`: the URL offers no payment the kit will sign, such as another token or a
-  payment valid for too long. Nothing was signed.
+  payment valid for too long, or it answered an estimate with a redirect. Nothing was signed.
 - `INSUFFICIENT_BALANCE`, `TOKEN_PAUSED`, `ADDRESS_BANNED`: nothing was signed.
 - `PAYMENT_UNCONFIRMED` or `PAYMENT_REFUSED`: the payment was signed and **may still settle**
   until `details.deadline` (Unix seconds). Do not pay again before then: a retry may pay twice.
