@@ -2,7 +2,8 @@
  * Serves the agent skills in skills.generated.ts over the MCP Skills
  * extension, so an agent wired to this server finds the integration guide
  * without a separate install. A client that does not support skills never
- * calls the methods and sees the server as before.
+ * calls the methods: its tools are unchanged, and it sees only the skills
+ * resource template and the resources capability it needs.
  */
 import type { McpServer } from '@modelcontextprotocol/server'
 import { type Skill, SkillsExtension, skillEntry } from '@modelcontextprotocol/server/ext/skills'
@@ -43,7 +44,8 @@ const skills = new SkillsExtension({
       const path = uri.startsWith(BASE_URI) ? uri.slice(BASE_URI.length) : undefined
       // hasOwn, so a URI such as skill://constructor cannot read the object's prototype.
       if (path === undefined || !Object.hasOwn(SKILL_FILES, path)) return undefined
-      return { text: SKILL_FILES[path] as string, mimeType: 'text/markdown' }
+      const text = SKILL_FILES[path] as string
+      return path.endsWith('.md') ? { text, mimeType: 'text/markdown' } : { text }
     },
   },
 })

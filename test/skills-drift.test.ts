@@ -6,6 +6,7 @@
  * the missing source a failure (CI sets that, so a broken checkout cannot pass
  * silently).
  */
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -32,10 +33,12 @@ describe('served skills drift', () => {
     expect(skillsCommit(skillsDir as string)).toBe(readFileSync(LOCK_PATH, 'utf8').trim())
   })
 
+  // Digests, so a failure on a public CI log never prints the private source.
   it.runIf(available)('matches the pinned skills', () => {
+    const digest = (text: string) => createHash('sha256').update(text).digest('hex')
     expect(
-      readFileSync(OUTPUT_PATH, 'utf8'),
+      digest(readFileSync(OUTPUT_PATH, 'utf8')),
       `${OUTPUT_PATH} has drifted from agent-skills; run pnpm generate:skills`,
-    ).toBe(renderSkillsModule(skillsDir as string))
+    ).toBe(digest(renderSkillsModule(skillsDir as string)))
   })
 })
