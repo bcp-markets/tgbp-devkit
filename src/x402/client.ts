@@ -17,6 +17,7 @@ import {
 } from 'viem'
 
 import type { SpendGuard } from '../agent/guard.js'
+import { matchService, type X402Service } from '../agent/policy.js'
 import { formatAmount } from '../amount.js'
 import { readCapped } from '../body.js'
 import { TgbpKitError } from '../errors.js'
@@ -89,6 +90,11 @@ export interface TgbpPaidResponse {
  * `eip2612GasSponsoring`, it also signs an EIP-2612 permit for Permit2, and
  * the facilitator pays the gas, so the payer needs no ETH.
  *
+ * The unpaid first request follows a redirect only to a URL on one of the
+ * guard policy's x402 services. A redirect anywhere else throws
+ * `SPEND_POLICY_DENIED` before any request reaches it. A browser fetch hides
+ * a redirect's target, so there a redirect throws `PAYMENT_NOT_OFFERED`.
+ *
  * Before signing it reads the token's pause state, the ban status of payer
  * and payee, and the payer's balance, and throws a `TgbpKitError` without
  * signing when one fails. These checks are best effort: the state can change
@@ -126,7 +132,8 @@ export function createTgbpPaymentFetch({
 ) => Promise<TgbpPaidResponse> {
   const account = walletClient.account
   if (!account) throw new Error('walletClient has no account; create it with `account`')
-  if (typeof guard?.authorize !== 'function') {
+  // The first request reads the policy's x402 services, so a guard without a policy fails here.
+  if (typeof guard?.authorize !== 'function' || !guard.policy) {
     throw new Error('Pass a spend guard: `guard: createSpendGuard({ policy, ledgerPath })`')
   }
   const payer = account.address
@@ -161,10 +168,17 @@ export function createTgbpPaymentFetch({
         ? limit
         : minBigInt(limit, penceToBaseUnits(payment.maxPence, token))
     const request = new Request(input, init)
-    const first = await fetchFn(request.clone())
-    if (first.status !== 402) return { response: first }
+    const first = await sendFirst(request, fetchFn, guard.policy.x402?.services ?? [])
+    if (first.response.status !== 402) return { response: first.response }
 
-    const { url, paymentRequired, offer } = await readTerms(first, request, http, token, network)
+    const { url, paymentRequired, offer } = await readTerms(
+      first.response,
+      request.url,
+      first.url,
+      http,
+      token,
+      network,
+    )
     const amount = BigInt(offer.amount)
     if (amount > callLimit) {
       throw new TgbpKitError(
@@ -215,10 +229,11 @@ export function createTgbpPaymentFetch({
       deadline: signedDeadline(payload) ?? Math.floor(Date.now() / 1000) + offer.maxTimeoutSeconds,
     }
 
+    // The request the server priced: a redirect may have changed its method, body and headers.
     const paid = new Request(url, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body === null ? null : await request.arrayBuffer(),
+      method: first.method,
+      headers: first.headers,
+      body: first.body,
       // A redirect would carry the signed payment to wherever it points.
       redirect: 'error',
       // An abort after signing surfaces as PAYMENT_UNCONFIRMED below.
@@ -342,24 +357,165 @@ export async function quoteTgbpPayment(
   }
   const network = x402Network(token)
   const http = new x402HTTPClient(new x402Client())
-  const { url, offer } = await readTerms(first, request, http, token, network)
+  const { url, offer } = await readTerms(
+    first,
+    request.url,
+    first.url || request.url,
+    http,
+    token,
+    network,
+  )
   return { free: false, url, amount: BigInt(offer.amount), payTo: getAddress(offer.payTo), network }
 }
 
-/** The x402 terms of a 402 answer to `request`, and the tGBP offer the client accepts. */
+/** The statuses a fetch follows as redirects; it returns any other 3xx as it is. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+/** As many redirects as a fetch follows before it fails. */
+const MAX_REDIRECTS = 20
+/** The headers a fetch drops with the body when a redirect turns the request into a GET. */
+const BODY_HEADERS = ['content-encoding', 'content-language', 'content-location', 'content-type']
+/** The headers a fetch drops when a redirect changes origin. */
+const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization']
+
+/** The last response of the unpaid first request, and the request that drew it. */
+interface FirstAnswer {
+  response: Response
+  url: string
+  method: string
+  headers: Headers
+  body: ArrayBuffer | null
+}
+
+/**
+ * Sends the unpaid first request and follows a redirect only to a URL on one
+ * of `services`, so a listed service that redirects cannot lead the client to
+ * a host the policy does not list. Each hop is fetched with
+ * `redirect: 'manual'` and rewritten as a fetch would rewrite it. It reads
+ * `request`'s body.
+ */
+async function sendFirst(
+  request: Request,
+  fetchFn: typeof fetch,
+  services: X402Service[],
+): Promise<FirstAnswer> {
+  let url = request.url
+  let method = request.method
+  let body = request.body === null ? null : await request.arrayBuffer()
+  const headers = new Headers(request.headers)
+  for (let redirects = 0; ; redirects += 1) {
+    const response = await fetchFn(
+      new Request(url, { method, headers, body, redirect: 'manual', signal: request.signal }),
+    )
+    if (response.type === 'error') {
+      throw new TgbpKitError('PAYMENT_NOT_OFFERED', `the fetch of ${ledgerUrl(url)} failed`, {
+        details: { url: ledgerUrl(url) },
+      })
+    }
+    // A spec fetch reports a manual redirect as status 0 and hides its target; Node's reports the 3xx.
+    if (response.type === 'opaqueredirect' || response.status === 0) {
+      throw new TgbpKitError(
+        'PAYMENT_NOT_OFFERED',
+        `${ledgerUrl(url)} answered with a redirect whose target this fetch hides, so the client cannot check it against the x402 services`,
+        { details: { url: ledgerUrl(url), status: response.status } },
+      )
+    }
+    // A fetch that followed a redirect itself skipped the service check, so its answer is not used.
+    if (response.redirected || (response.url !== '' && response.url !== withoutFragment(url))) {
+      throw new TgbpKitError(
+        'PAYMENT_NOT_OFFERED',
+        `${ledgerUrl(url)} was answered from another URL: the fetch followed a redirect the client did not check`,
+        { details: { url: ledgerUrl(url) } },
+      )
+    }
+    const redirect = REDIRECT_STATUSES.has(response.status)
+    // The caller's own redirect mode still holds: 'error' refuses a redirect and 'manual' returns it.
+    if (redirect && request.redirect === 'error') {
+      await response.body?.cancel().catch(() => undefined)
+      throw new TypeError(`${ledgerUrl(url)} redirected, and the request sets redirect: 'error'`)
+    }
+    const location = response.headers.get('location')
+    if (!redirect || request.redirect === 'manual' || location === null) {
+      return { response, url, method, headers, body }
+    }
+    // The redirect's own body is discarded, so a failure to cancel it changes nothing.
+    await response.body?.cancel().catch(() => undefined)
+
+    let next: URL
+    try {
+      next = new URL(location, url)
+    } catch {
+      // No cause: the parse error quotes the location, which may carry secrets.
+      throw new TgbpKitError(
+        'PAYMENT_NOT_OFFERED',
+        `${ledgerUrl(url)} redirected to a location that is not a URL`,
+        { details: { url: ledgerUrl(url), status: response.status } },
+      )
+    }
+    // Origin and path only, as the guard reports a URL: the query and credentials may carry secrets.
+    const refused =
+      next.protocol !== 'https:' && next.protocol !== 'http:'
+        ? `a ${next.protocol} URL, which no x402 service can be`
+        : next.username !== '' || next.password !== ''
+          ? `${ledgerUrl(next.href)}, a URL carrying credentials`
+          : matchService(services, next.href) === undefined
+            ? `${ledgerUrl(next.href)}, which is not an approved x402 service`
+            : undefined
+    if (refused !== undefined) {
+      const web = next.protocol === 'https:' || next.protocol === 'http:'
+      throw new TgbpKitError(
+        'SPEND_POLICY_DENIED',
+        `Spend policy refused x402: ${ledgerUrl(url)} redirected to ${refused}`,
+        {
+          details: {
+            action: 'x402',
+            ...(web ? { url: ledgerUrl(next.href) } : { scheme: next.protocol }),
+            redirectedFrom: ledgerUrl(url),
+            rule: 'services',
+          },
+        },
+      )
+    }
+    if (redirects === MAX_REDIRECTS) {
+      throw new TgbpKitError(
+        'PAYMENT_NOT_OFFERED',
+        `${ledgerUrl(request.url)} redirected more than ${MAX_REDIRECTS} times`,
+        { details: { url: ledgerUrl(request.url), redirectedTo: ledgerUrl(next.href) } },
+      )
+    }
+
+    // The rewrites a fetch makes when it follows a redirect.
+    if (
+      ((response.status === 301 || response.status === 302) && method === 'POST') ||
+      (response.status === 303 && method !== 'GET' && method !== 'HEAD')
+    ) {
+      method = 'GET'
+      body = null
+      for (const name of BODY_HEADERS) headers.delete(name)
+    }
+    if (next.origin !== new URL(url).origin) {
+      for (const name of CREDENTIAL_HEADERS) headers.delete(name)
+    }
+    url = next.href
+  }
+}
+
+/**
+ * The x402 terms of `first`, the 402 that `url` answered to a request for
+ * `called`, and the tGBP offer the client accepts.
+ */
 async function readTerms(
   first: Response,
-  request: Request,
+  called: string,
+  url: string,
   http: x402HTTPClient,
   token: EvmTokenDeployment,
   network: string,
 ): Promise<{ url: string; paymentRequired: PaymentRequired; offer: PaymentRequirements }> {
-  const url = first.url || request.url
-  if (new URL(url).origin !== new URL(request.url).origin) {
+  if (new URL(url).origin !== new URL(called).origin) {
     throw new TgbpKitError(
       'PAYMENT_NOT_OFFERED',
-      `${request.url} redirected to ${url}, which asked for payment; the client pays only the origin it called`,
-      { details: { url: request.url, redirectedTo: url } },
+      `${ledgerUrl(called)} redirected to ${ledgerUrl(url)}, which asked for payment; the client pays only the origin it called`,
+      { details: { url: ledgerUrl(called), redirectedTo: ledgerUrl(url) } },
     )
   }
   let paymentRequired: PaymentRequired
@@ -413,6 +569,13 @@ function pickTgbpOffer(
     )
   }
   return offer
+}
+
+/** `url` as a response reports it: a fetch never sends the fragment. */
+function withoutFragment(url: string): string {
+  const parsed = new URL(url)
+  parsed.hash = ''
+  return parsed.href
 }
 
 /** The URL as the ledger records it: credentials, query and fragment may carry secrets. */

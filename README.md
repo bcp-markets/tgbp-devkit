@@ -367,12 +367,12 @@ anything is signed. With `estimate: true` it returns the price and whether it fi
 signs nothing and records nothing; a payment needs a `reason`, which the spend ledger records.
 The policy must allow `x402` on `base-sepolia`, the payee, and the URL's service in
 `x402.services`. The tool checks the service before it sends any request: a URL that no listed
-service matches is refused with `SPEND_POLICY_DENIED`. An estimate also refuses a redirect. The
-tool needs
+service matches is refused with `SPEND_POLICY_DENIED`. An estimate also refuses a redirect, and
+a payment follows one only to a URL on a listed service. The tool needs
 `TGBP_EVM_PRIVATE_KEY`, `TGBP_RPC_URL_BASE_SEPOLIA`, and the `@x402/core` and `@x402/evm`
 packages: add `"-p", "@x402/core@2", "-p", "@x402/evm@2"` to the `npx` arguments above. The other
-tools run without them. The server fetches the listed services from the machine it runs on, and a
-payment's first, unpaid request follows their redirects, so run it where that is acceptable.
+tools run without them. The server fetches the listed services from the machine it runs on, so run
+it where that is acceptable.
 
 ### Skills
 
@@ -502,6 +502,10 @@ payment settles. The client also refuses to sign, with `PAYMENT_OVER_LIMIT` or
 - the payment would stay valid for longer than 600 seconds
 - the 402 came from a different origin after a redirect
 
+The first, unpaid request follows a redirect only to a URL on one of the spend policy's x402
+services. A redirect anywhere else throws `SPEND_POLICY_DENIED` before any request reaches it. A
+browser fetch hides a redirect's target, so there a redirect throws `PAYMENT_NOT_OFFERED`.
+
 One payment fetch pays one request at a time, because payments signed at once would share a
 permit nonce.
 
@@ -554,7 +558,7 @@ Failures the kit can explain throw a `TgbpKitError` with a `code`:
 | `API_ERROR` | The API answered with an error. `details` has `status`, `apiCode` and `requestId`. |
 | `API_UNREACHABLE` | The API gave no response after every retry. |
 | `SPEND_POLICY_DENIED` | The agent spend policy refused the action. `details.rule` names the rule. |
-| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain, or answered an MCP estimate with a redirect. |
+| `PAYMENT_NOT_OFFERED` | An x402 server asked for payment but offered no tGBP payment on the client's chain, or answered with a redirect the client does not follow: to a location that is not a URL, more than 20 times, in a browser, or to an MCP estimate. |
 | `PAYMENT_OVER_LIMIT` | An x402 price is above the client's `maxPencePerRequest`. |
 | `PAYMENT_REFUSED` | The x402 server rejected a signed payment; `details.reason` says why. |
 | `PAYMENT_UNCONFIRMED` | The client signed an x402 payment, but no matching settlement came back. |

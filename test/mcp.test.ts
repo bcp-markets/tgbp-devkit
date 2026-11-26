@@ -978,6 +978,7 @@ describe('tgbp_x402_pay', () => {
     app.get('/quote', (_req, res) => res.json({ quote: 'paid' }))
     app.get('/big', (_req, res) => res.type('text').send('x'.repeat(30_000)))
     app.get('/free', (_req, res) => res.json({ quote: 'free' }))
+    app.get('/moved', (_req, res) => res.redirect(301, '/quote'))
     paid = await serve(app)
   })
 
@@ -1121,6 +1122,66 @@ describe('tgbp_x402_pay', () => {
       await listed.close()
       await unlisted.close()
     }
+  })
+
+  it('refuses a payment that a listed service redirects elsewhere before any request reaches it', async () => {
+    const unlisted = await unlistedServer()
+    const app = express()
+    app.use((_req, res) => res.redirect(302, `${unlisted.url}/quote?key=secret`))
+    const listed = await serve(app)
+    try {
+      const policy = x402Policy()
+      const x402 = { ...policy.x402, services: [{ match: listed.url, category: 'quotes' }] }
+      const { isError, body } = await call(
+        await connectX402({ ...policy, x402 } as SpendPolicy),
+        'tgbp_x402_pay',
+        { url: `${listed.url}/quote`, maxPence: 5, reason: 'a quote for the user' },
+      )
+      expect(isError).toBe(true)
+      expect(body.code).toBe('SPEND_POLICY_DENIED')
+      expect(body.details).toMatchObject({
+        rule: 'services',
+        url: `${unlisted.url}/quote`,
+        redirectedFrom: `${listed.url}/quote`,
+      })
+      expect(body.message).not.toMatch(/secret/)
+      expect(unlisted.hits).toBe(0)
+      expect(signTypedData).not.toHaveBeenCalled()
+      expect(await ledger()).toBe('')
+    } finally {
+      await listed.close()
+      await unlisted.close()
+    }
+  })
+
+  it('pays a listed URL that redirects to another listed URL', async () => {
+    const { isError, body } = await call(await connectX402(), 'tgbp_x402_pay', {
+      url: `${paid.url}/moved`,
+      maxPence: 5,
+      reason: 'a quote for the user',
+    })
+    expect(isError).toBe(false)
+    expect(body).toMatchObject({ status: 200, body: '{"quote":"paid"}' })
+    expect(body.paid).toMatchObject({ amount: '0.05', payTo: PAY_TO })
+    expect(fake.calls.settle).toHaveLength(1)
+    // The ledger records the URL that asked for payment.
+    const [entry] = (await ledger()).trim().split('\n')
+    expect(JSON.parse(entry ?? '{}')).toMatchObject({ action: 'x402', url: `${paid.url}/quote` })
+  })
+
+  it('refuses a payment redirected to a path its listed service does not cover', async () => {
+    const policy = x402Policy()
+    const x402 = { ...policy.x402, services: [{ match: `${paid.url}/moved`, category: 'quotes' }] }
+    const { isError, body } = await call(
+      await connectX402({ ...policy, x402 } as SpendPolicy),
+      'tgbp_x402_pay',
+      { url: `${paid.url}/moved`, maxPence: 5, reason: 'a quote for the user' },
+    )
+    expect(isError).toBe(true)
+    expect(body.code).toBe('SPEND_POLICY_DENIED')
+    expect(body.details).toMatchObject({ rule: 'services', url: `${paid.url}/quote` })
+    expect(signTypedData).not.toHaveBeenCalled()
+    expect(fake.calls.verify).toHaveLength(0)
   })
 
   it('says a route is free with estimate: true', async () => {
