@@ -21,7 +21,7 @@ import {
   zeroAddress,
 } from 'viem'
 import { foundry } from 'viem/chains'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { sellerApp } from '../examples/x402-seller/seller.js'
 import { createSpendGuard, type SpendGuard, type SpendPolicy } from '../src/agent/index.js'
@@ -1089,7 +1089,88 @@ describe('createTgbpPaymentFetch', () => {
     expect((error as Error).name).toBe('AbortError')
     expect(signed).toHaveLength(0)
     expect(fake.calls.verify).toHaveLength(0)
-    // The approved entry stays: the ledger may overstate the day's spend, never understate it.
+    expect(await readFile(ledgerPath, 'utf8').catch(() => '')).toBe('')
+  })
+
+  it('records nothing for a payment cancelled during a slow approval, and asks the owner again next time', async () => {
+    const asked: AbortSignal[] = []
+    const answers: ((yes: boolean) => void)[] = []
+    const owner = createSpendGuard({
+      policy: policy(),
+      ledgerPath,
+      // An owner who answers only when the test says so.
+      approver: (_, signal) => {
+        asked.push(signal)
+        return new Promise((resolve) => answers.push(resolve))
+      },
+    })
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: payerWallet,
+      maxPencePerRequest: 10,
+      token,
+      guard: owner,
+    })
+    const caller = new AbortController()
+    const cancelled = fetchPaid(`${server.url}/quote`, { signal: caller.signal }, REASON).catch(
+      (e: unknown) => e,
+    )
+    await vi.waitFor(() => expect(asked).toHaveLength(1))
+    caller.abort()
+    // The cancel ends the call and the wait while the owner is still deciding.
+    expect(((await cancelled) as Error).name).toBe('AbortError')
+    expect(asked[0]?.aborted).toBe(true)
+
+    // The queue is free at the cancel: the next payment reaches the owner before the first answer.
+    const next = fetchPaid(`${server.url}/quote`, undefined, REASON)
+    await vi.waitFor(() => expect(asked).toHaveLength(2))
+    // The owner's late yes to the cancelled call pays and records nothing.
+    answers[0]?.(true)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(await readFile(ledgerPath, 'utf8').catch(() => '')).toBe('')
+    expect(fake.calls.verify).toHaveLength(0)
+
+    answers[1]?.(true)
+    const { settlement } = await next
+    expect(settlement?.success).toBe(true)
+    expect(fake.calls.settle).toHaveLength(1)
+    const lines = (await readFile(ledgerPath, 'utf8')).trim().split('\n')
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({ firstPayment: true })
+  })
+
+  it('keeps the ledger entry and signs nothing for a payment cancelled once the guard recorded it', async () => {
+    const signed: unknown[] = []
+    const counting = {
+      ...payerWallet,
+      signTypedData: (args: never) => {
+        signed.push(args)
+        return payerWallet.signTypedData(args)
+      },
+    } as WalletClient
+    const caller = new AbortController()
+    // The caller gives up just after the guard records the payment.
+    const recording: SpendGuard = {
+      ...guard,
+      authorize: async (request, signal) => {
+        await guard.authorize(request, signal)
+        caller.abort()
+      },
+    }
+    const fetchPaid = createTgbpPaymentFetch({
+      publicClient,
+      walletClient: counting,
+      maxPencePerRequest: 10,
+      token,
+      guard: recording,
+    })
+    const error = await fetchPaid(`${server.url}/quote`, { signal: caller.signal }, REASON).catch(
+      (e: unknown) => e,
+    )
+    expect((error as Error).name).toBe('AbortError')
+    expect(signed).toHaveLength(0)
+    expect(fake.calls.verify).toHaveLength(0)
+    // The ledger may overstate the day's spend, never understate it.
     expect(await readFile(ledgerPath, 'utf8')).toContain(`${server.url}/quote`)
   })
 

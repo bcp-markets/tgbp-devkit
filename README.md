@@ -280,7 +280,9 @@ The first x402 payment to each service waits for a human too: through the MCP cl
 the ledger records a payment to a service, its category budget and the per-minute limit decide
 alone. Without an approver, the first payment to every service is refused with
 `rule: 'firstPayment'` and a message that says `approval required`. The ledger marks the
-approved payment `"firstPayment": true`.
+approved payment `"firstPayment": true`. A `tgbp_x402_pay` call stops after 45 seconds, so a
+client that asks the human during the call gives them that long. A cancel before the human
+answers pays and records nothing, and the next call asks again.
 
 ### Running the server
 
